@@ -116,6 +116,15 @@ int main(void)
   printf("VFS full name of sys$scratch:x.db: %s\n", full);
   rc = vfs->xFullPathname(vfs, "/sys$scratch/y.db", sizeof full, full);
   printf("VFS full name of /sys$scratch/y.db: %s (rc %d)\n", full, rc);
+  {
+    static const char *names[] = { "../RUN/vfs_test.db", "../run/vfs_test.db", "sub/x.db", "a.b.c.db" };
+    int k;
+    for (k = 0; k < 4; k++) {
+      full[0] = 0;
+      rc = vfs->xFullPathname(vfs, names[k], sizeof full, full);
+      printf("VFS full name of %s: %s (rc %d)\n", names[k], full, rc);
+    }
+  }
 
   /* 3 */
   vfs->xAccess(vfs, "vfs_test.db", SQLITE_ACCESS_EXISTS, &res);

@@ -111,9 +111,18 @@ locks visible to every process using the database, whatever its account. Options
 - (c) **Dot-file locking** (SQLite's `unix-dotfile` idea: create/delete a lock file): no
   shared readers, so every reader would block the others; poor for a web pool.
 
-Recommendation: **(a)**. Open point: one test with two accounts in different UIC groups
-(e.g. the user's and the LIGHTTPD account) that the C RTL's locks exclude across groups too;
-it needs the user to run one side.
+Recommendation: **(a)**.
+
+**As built (Phase 1):** the lock file's bytes are not SQLite's: PENDING is byte 0,
+RESERVED byte 2, the SHARED range bytes 4-513. With SQLite's adjacent bytes
+(0x40000000, +1, +2) the C RTL leaked 898 bytes of P0 per write transaction even with
+exact pairs (PORTING_LOG #7); with the gaps, nothing on any path. Every VMS VFS that
+shares a database must use this layout, so it is fixed from the first kit on. The RMS and
+ACP blocks are allocated with `_malloc32` (clang) and refused above 2 GB (#9).
+
+Open point: one test with two accounts in different UIC groups (e.g. the user's and the
+LIGHTTPD account) that the C RTL's locks exclude across groups too; it needs the user to run
+one side.
 
 ## D6. File names and versions
 

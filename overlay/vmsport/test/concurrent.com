@@ -2,7 +2,8 @@ $! CONCURRENT.COM - P2 processes (default 4) write one database at once:
 $! each runs WORK.SQL (200 transactions of 5 rows, BEGIN IMMEDIATE, with a
 $! busy timeout) while this process reads (READER.SQL).  Then every row must
 $! be there and the database intact.
-$! P1: CLANG (default) or CC.
+$! P1: CLANG (default), CC, or MIXED: odd workers use the clang build, even
+$! ones (and the reader) the VSI C build, on the same database.
 $ set noon
 $ set process/parse_style=extended
 $ define/process decc$argv_parse_style enable
@@ -14,7 +15,10 @@ $ n = 4
 $ if p2 .nes. "" then n = f$integer(p2)
 $ set default 'here'
 $ set default [--]
+$ mixed = comp .eqs. "MIXED"
+$ if mixed then comp = "CC"
 $ obj = f$parse("[.OBJ_''f$getsyi("ARCH_NAME")'_''comp']") - ".;"
+$ cobj = f$parse("[.OBJ_''f$getsyi("ARCH_NAME")'_CLANG]") - ".;"
 $ set default 'here'
 $ if f$search("''obj'waitdone.exe") .eqs. ""
 $ then
@@ -28,6 +32,7 @@ $   endif
 $   link/executable='obj'waitdone.exe 'obj'waitdone.obj
 $ endif
 $ sq :== $'obj'sqlite3.exe
+$ sqc :== $'cobj'sqlite3.exe
 $ waitdone :== $'obj'waitdone.exe
 $ if f$search("RUN.DIR") .eqs. "" then create/directory [.RUN]
 $ set default [.RUN]
@@ -39,7 +44,9 @@ $ if i .gt. n then goto s_done
 $ open/write c w_'i'.com
 $ write c "$ set noon"
 $ write c "$ define/user sys$input ''here'work.sql"
-$ write c "$ sq conc.db ""-cmd"" "".timeout 60000"" ""-cmd"" "".parameter set @w ''i'"""
+$ cmd = "sq"
+$ if mixed .and. (i/2)*2 .ne. i then cmd = "sqc"
+$ write c "$ ''cmd' conc.db ""-cmd"" "".timeout 60000"" ""-cmd"" "".parameter set @w ''i'"""
 $ write c "$ open/write d done_''i'.txt"
 $ write c "$ close d"
 $ close c

@@ -112,7 +112,7 @@ typedef struct VmsFile {
   VmsIo *io;                        /* 32-bit block */
   unsigned short chan;
   unsigned short fid[3];
-  int readonly;
+  int isReadonly;
   int eLock;                        /* this connection's lock */
   VmsLockFile *lf;                  /* set at the first xLock */
   i64 eof;                          /* end of file as this connection knows it */
@@ -126,9 +126,22 @@ typedef struct VmsFile {
 
 static VmsLockFile *lockFiles;
 
+/* 32-bit memory: _malloc32 with 64-bit pointers (clang, which does not
+** define __INITIAL_POINTER_SIZE), malloc with VSI C's 32-bit pointers */
+#if defined(__clang__) || (defined(__INITIAL_POINTER_SIZE) && __INITIAL_POINTER_SIZE == 64)
+#  define vmsMalloc32 _malloc32
+#else
+#  define vmsMalloc32 malloc
+#endif
+
 static void *alloc32(size_t n)
 {
-  void *p = _malloc32(n);
+  void *p = vmsMalloc32(n);
+  if (p && (unsigned long) p >= 0x80000000UL) {     /* RMS would refuse it */
+    sqlite3_log(SQLITE_NOMEM, "vms: no 32-bit memory for RMS blocks");
+    free(p);
+    return 0;
+  }
   if (p) memset(p, 0, n);
   return p;
 }
@@ -814,7 +827,7 @@ static int vmsOpen(sqlite3_vfs *vfs, const char *zName, sqlite3_file *id, int fl
   }
   p->chan = (unsigned short) io->fab.fab$l_stv;
   memcpy(p->fid, io->naml.naml$w_fid, sizeof p->fid);
-  p->readonly = !rw;
+  p->isReadonly = !rw;
   if (zName) {
     char full[VMS_MAXPATH + 1];
     nameNoVersion(io, 1, full, sizeof full);

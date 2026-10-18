@@ -39,6 +39,9 @@ done < "$top/patches/series"
 done
 cp -a "$top/overlay/." "$stage/"
 
+step "shareable image options"
+"$top/tools/gen_shr_opt.sh" "$stage"
+
 printf 'VERSION=%s\nKIT_VERSION=%s-vms%s\n' "$UPSTREAM_VERSION" "$UPSTREAM_VERSION" \
     "$VMS_PATCH_LEVEL" > "$stage/vmsport/version.env"
 step "staged $stage"

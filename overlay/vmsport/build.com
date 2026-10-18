@@ -7,10 +7,13 @@ $!
 $! Products, in [.OBJ_<arch>_<compiler>]:
 $!     LIBSQLITE3.OLB   sqlite3.c with our VFS (vmsport/os_vms.c, D5)
 $!     SQLITE3.EXE      the shell
+$!     SQLITE3$SHR.EXE  the shareable image (symbol vector: sqlite3_shr.symbols)
+$!     SQLITE3_SHR_SHELL.EXE  the shell linked against it, for the tests
 $! and the install tree other ports build against (as vms-zlib, vms-pcre2):
 $!     [.INSTALL_<arch>[_CLANG].INCLUDE]SQLITE3.H, SQLITE3EXT.H
 $!     [.INSTALL_<arch>[_CLANG].LIB]LIBSQLITE3.OLB
 $!     [.INSTALL_<arch>[_CLANG].BIN]SQLITE3.EXE
+$!     [.INSTALL_<arch>[_CLANG].LIB]SQLITE3$SHR.EXE
 $! Compile-time options: docs/DECISIONS.md D4.
 $!
 $ status = 44
@@ -107,12 +110,29 @@ $   write sys$error "BUILD: link failed: SQLITE3.EXE"
 $   status = 44
 $   goto done
 $ endif
+$ link/shareable='obj'SQLITE3$SHR.EXE 'obj'sqlite3.obj,'obj'os_vms.obj,[.vmsport]SQLITE3_SHR.OPT/option
+$ if .not. $status
+$ then
+$   write sys$error "BUILD: link failed: SQLITE3$SHR.EXE"
+$   status = 44
+$   goto done
+$ endif
+$ shrimg = f$parse("SQLITE3$SHR.EXE",obj)
+$ define/user sqlite3$shr 'shrimg'
+$ link/executable='obj'SQLITE3_SHR_SHELL.EXE 'obj'shell.obj,sys$input/option
+sqlite3$shr/shareable
+$ if .not. $status
+$ then
+$   write sys$error "BUILD: link failed: SQLITE3_SHR_SHELL.EXE"
+$   status = 44
+$   goto done
+$ endif
 $!
 $ if f$search("''inst']INCLUDE.DIR") .eqs. "" then create/directory 'inst'.INCLUDE]
 $ if f$search("''inst']LIB.DIR") .eqs. "" then create/directory 'inst'.LIB]
 $ if f$search("''inst']BIN.DIR") .eqs. "" then create/directory 'inst'.BIN]
 $ copy/nolog sqlite3.h,sqlite3ext.h 'inst'.INCLUDE]
-$ copy/nolog 'obj'LIBSQLITE3.OLB 'inst'.LIB]
+$ copy/nolog 'obj'LIBSQLITE3.OLB,'obj'SQLITE3$SHR.EXE 'inst'.LIB]
 $ copy/nolog 'obj'SQLITE3.EXE 'inst'.BIN]
 $ purge/nolog 'inst'...],'obj'
 $ write sys$output "BUILD: ''obj'LIBSQLITE3.OLB, ''obj'SQLITE3.EXE, install tree ''inst']"
