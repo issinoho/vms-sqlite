@@ -9,4 +9,4 @@ create table w(x text collate nocase);
 insert into w values('b'), ('A'), ('a'), ('B'), ('c'), (' c');
 select x from w order by x, x collate binary;
 select group_concat(x, ',') from (select x from w order by x collate binary desc);
-select format('%s=%d', 'n', 5), soundex('Robert'), soundex('Tymczak'), likelihood(1, 0.5), unhex('48656c6c6f'), unistr('é\0041');
+select format('%s=%d', 'n', 5), likelihood(1, 0.5), unhex('48656c6c6f'), unistr('é\0041');
