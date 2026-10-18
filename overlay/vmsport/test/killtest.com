@@ -36,7 +36,7 @@ $ if i .gt. cycles then goto k_done
 $ spawn/nowait/process=KILLW_'f$getjpi("","PID")'/output=killw.log @killw.com
 $ pname = "KILLW_" + f$getjpi("","PID")
 $! run for 1 to 5 seconds (the tick is the time of day: random enough)
-$ wait_s = 1 + f$integer(f$extract(20, 2, f$time())) / 25
+$ wait_s = 1 + f$integer(f$extract(21, 2, f$time())) / 25
 $ waitdone 1 'wait_s'
 $ ctx = ""
 $ pid = f$pid(ctx)
