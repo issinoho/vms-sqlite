@@ -25,6 +25,15 @@ rm -rf "$stage" "$top/staging/$(basename "$tarball" .tar.gz)"; mkdir -p "$top/st
 tar -xzf "$tarball" -C "$top/staging"
 mv "$top/staging/$(basename "$tarball" .tar.gz)" "$stage"
 
+# SQLite's multi-process, thread and speed tests, from the full source zip (D1)
+step "test programs from $(basename "$TESTSRC_URL")"
+unzip -q -o "$top/cache/$(basename "$TESTSRC_URL")" -d "$top/staging/tsrc.$$"
+tsrc=$top/staging/tsrc.$$/$(basename "$TESTSRC_URL" .zip)
+mkdir -p "$stage/test"
+cp -a "$tsrc/mptest" "$stage/"
+cp "$tsrc/test/speedtest1.c" "$tsrc/test/threadtest4.c" "$stage/test/"
+rm -rf "$top/staging/tsrc.$$"
+
 while read -r p; do
     case $p in ''|'#'*) continue ;; esac
     step "patch $p"

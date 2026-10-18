@@ -1,0 +1,17 @@
+Subject: mptest: run config01 with the OpenVMS VFS too
+
+config01.test configures its tasks with different journal modes and
+page sizes, and runs only when vfsname() is 'unix'.  Nothing in it is
+specific to the unix VFS; let it run with 'vms' as well.
+
+--- a/mptest/config01.test	2026-10-18 19:12:40.319990167 +0100
++++ b/mptest/config01.test	2026-10-18 19:12:40.321775426 +0100
+@@ -1,7 +1,7 @@
+ /*
+ ** Configure five tasks in different ways, then run tests.
+ */
+---if vfsname() GLOB 'unix'
++--if vfsname() GLOB 'unix' OR vfsname() GLOB 'vms'
+ PRAGMA page_size=8192;
+ --task 1
+   PRAGMA journal_mode=PERSIST;

@@ -21,6 +21,24 @@
 **    POSIX locks belong to the process, so one record per lock file per
 **    process (VmsLockFile) holds them for all its connections.
 **
+**  - XFC writes through, so every $QIO write waits for the disk.  Contiguous
+**    writes (journal records, the pages of a commit) collect in a buffer per
+**    file and go out as large transfers when anything could look: a read of
+**    that range, sync, truncate, close, and before a write lock is released.
+**    On Unix a process's writes outlive it in the OS cache, and SQLite relies
+**    on that (synchronous=OFF, a crash mid-transaction): an exit handler
+**    writes every buffer and end of file when the image exits.  STOP/ID runs
+**    no exit handlers; it is then a power failure, which SQLite's sync points
+**    cover unless synchronous=OFF.
+**
+**  - A $QIO read costs ~0.3 ms, and SQLite discards its page cache whenever
+**    another process has committed.  Reads go through a small cache per file
+**    (VMS_NWIN windows of 32 KB, one $QIO each).  With a rollback journal no
+**    other process can change the database while this one holds a lock, and
+**    across transactions the cache is kept while the database's change
+**    counter (bytes 24-27, which SQLite increments on every commit) is
+**    unchanged.  WAL would need another rule: there the cache must go.
+**
 **  - RMS and ACP control blocks have 32-bit address fields; they live in a
 **    per-file block allocated in 32-bit memory (VmsIo).  $QIOW takes 64-bit
 **    buffer addresses, so pages move to and from SQLite's buffers directly.
@@ -44,6 +62,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -56,6 +75,8 @@
 #define VMS_BLOCK     512
 #define VMS_XFER      32768         /* bytes per $QIO */
 #define VMS_CHUNK     64            /* default extension, blocks */
+#define VMS_WBUF      131072        /* write buffer per file, bytes */
+#define VMS_NWIN      8             /* read cache: windows of VMS_XFER bytes */
 
 /* The lock bytes in "<database>-lock".  The unix VFS uses adjacent bytes in
 ** the database itself (PENDING 0x40000000, RESERVED +1, SHARED +2..+511); the
@@ -107,24 +128,62 @@ struct VmsLockFile {
   int reserved;                     /* RESERVED byte held (write) */
 };
 
-typedef struct VmsFile {
+typedef struct VmsFile VmsFile;
+struct VmsFile {
   sqlite3_file base;
+  VmsFile *pNext, *pPrev;           /* open files, for the exit handler */
   VmsIo *io;                        /* 32-bit block */
   unsigned short chan;
   unsigned short fid[3];
   int isReadonly;
   int eLock;                        /* this connection's lock */
   VmsLockFile *lf;                  /* set at the first xLock */
-  i64 eof;                          /* end of file as this connection knows it */
+  i64 eof;                          /* end of file, including buffered writes */
+  i64 dEof;                         /* end of what is on the disk */
   int eofDirty;                     /* eof not yet written to the header */
+  char *wbuf;                       /* write buffer (VMS_WBUF): contiguous writes */
+  i64 wOff;                         /*   its file offset */
+  int wLen;                         /*   bytes in it */
+  char *rcache;                     /* read cache: VMS_NWIN windows */
+  i64 rcOff[VMS_NWIN];              /*   window offsets, -1 empty */
+  int rcLen[VMS_NWIN];              /*   bytes read into each */
+  unsigned rcUse[VMS_NWIN], rcClock;
+  unsigned char counter[4];         /* the change counter the cache matches */
+  int counterValid;
+  int isMainDb;
   unsigned hiblk;                   /* allocated blocks, as last seen */
   int chunk;                        /* extension, blocks */
   char *zDelete;                    /* delete this name at close */
   char *zPath;                      /* the full name (for the lock file) */
   unsigned lastStatus;              /* last failing VMS status */
-} VmsFile;
+};
 
 static VmsLockFile *lockFiles;
+static VmsFile *openFiles;
+
+/* Diagnostics: with the logical name VMSSQLITE_TRACE naming a directory,
+** each process logs its lock calls and syncs to <dir>VMSSQLITE_<pid>.LOG. */
+static FILE *traceFile;
+static unsigned long nQioR, nQioW, nAcp, nXRead, nXWrite;   /* counted when tracing */
+static void trace(const char *fmt, ...)
+{
+  va_list ap;
+  struct timeval tv;
+  if (!traceFile) return;
+  gettimeofday(&tv, 0);
+  fprintf(traceFile, "%02d:%02d.%03d ", (int) (tv.tv_sec / 60 % 60), (int) (tv.tv_sec % 60),
+          (int) (tv.tv_usec / 1000));
+  va_start(ap, fmt);
+  vfprintf(traceFile, fmt, ap);
+  va_end(ap);
+  fputc('\n', traceFile);
+  fflush(traceFile);
+}
+static const char *lockName(int e)
+{
+  static const char *n[] = { "NONE", "SHARED", "RESERVED", "PENDING", "EXCLUSIVE" };
+  return e >= 0 && e <= 4 ? n[e] : "?";
+}
 
 /* 32-bit memory: _malloc32 with 64-bit pointers (clang, which does not
 ** define __INITIAL_POINTER_SIZE), malloc with VSI C's 32-bit pointers */
@@ -238,6 +297,7 @@ static unsigned acp(VmsFile *p, unsigned func, int withAtr, int exctl, unsigned 
   io->atr[0].atr$w_type = ATR$C_RECATTR;
   io->atr[0].atr$l_addr = &io->fat;
   memset(&io->atr[1], 0, sizeof io->atr[1]);
+  nAcp++;
   st = sys$qiow(EFN$C_ENF, p->chan, func, (struct _iosb *) io->iosb, 0, 0, &io->fibd, 0, 0, 0,
                 withAtr ? (__int64) io->atr : 0, 0);
   if (st & 1) st = io->iosb[0];
@@ -252,6 +312,7 @@ static unsigned readAttr(VmsFile *p)
     unsigned efblk = ((unsigned) f->fat$w_efblkh << 16) | f->fat$w_efblkl;
     p->hiblk = ((unsigned) f->fat$w_hiblkh << 16) | f->fat$w_hiblkl;
     p->eof = efblk ? (i64) (efblk - 1) * VMS_BLOCK + f->fat$w_ffbyte : 0;
+    p->dEof = p->eof;
   }
   return st;
 }
@@ -309,7 +370,9 @@ static unsigned blockIo(VmsFile *p, int write, void *buf, i64 n, i64 off)
   while (n > 0) {
     unsigned len = n > VMS_XFER ? VMS_XFER : (unsigned) n;
     unsigned short iosb[4];
-    unsigned st = sys$qiow(EFN$C_ENF, p->chan, write ? IO$_WRITEVBLK : IO$_READVBLK,
+    unsigned st;
+    if (write) nQioW++; else nQioR++;
+    st = sys$qiow(EFN$C_ENF, p->chan, write ? IO$_WRITEVBLK : IO$_READVBLK,
                            (struct _iosb *) iosb, 0, 0, b, len, (unsigned) (off / VMS_BLOCK) + 1,
                            0, 0, 0);
     if (st & 1) st = iosb[0];
@@ -323,11 +386,22 @@ static unsigned blockIo(VmsFile *p, int write, void *buf, i64 n, i64 off)
 ** sqlite3_io_methods
 */
 static int vmsLockRelease(VmsFile *p, int eLock);
+static int flushWbuf(VmsFile *p);
 
 static int vmsClose(sqlite3_file *id)
 {
   VmsFile *p = (VmsFile *) id;
-  int rc = flushEof(p);
+  int rc = flushWbuf(p);
+  if (rc == SQLITE_OK) rc = flushEof(p);
+  sqlite3_free(p->wbuf);
+  p->wbuf = 0;
+  sqlite3_free(p->rcache);
+  p->rcache = 0;
+  sqlite3_mutex_enter(vfsMutex());
+  if (p->pPrev) p->pPrev->pNext = p->pNext; else if (openFiles == p) openFiles = p->pNext;
+  if (p->pNext) p->pNext->pPrev = p->pPrev;
+  p->pNext = p->pPrev = 0;
+  sqlite3_mutex_leave(vfsMutex());
   if (p->lf) {
     vmsLockRelease(p, NO_LOCK);
     sqlite3_mutex_enter(vfsMutex());
@@ -354,13 +428,79 @@ static int vmsClose(sqlite3_file *id)
   return rc;
 }
 
+static void cacheDrop(VmsFile *p, i64 off, i64 n)   /* windows overlapping [off, off+n) */
+{
+  int i;
+  for (i = 0; i < VMS_NWIN; i++)
+    if (p->rcOff[i] >= 0 && p->rcOff[i] < off + n && p->rcOff[i] + VMS_XFER > off) p->rcOff[i] = -1;
+}
+
+static void cacheDropAll(VmsFile *p)
+{
+  int i;
+  for (i = 0; i < VMS_NWIN; i++) p->rcOff[i] = -1;
+}
+
+/* The window holding offset w (a multiple of VMS_XFER), read if need be.
+** Returns its index, or -1 with *pst set. */
+static int cacheWindow(VmsFile *p, i64 w, unsigned *pst)
+{
+  int i, v = -1;
+  i64 len;
+  for (i = 0; i < VMS_NWIN; i++)
+    if (p->rcOff[i] == w) { p->rcUse[i] = ++p->rcClock; return i; }
+  for (i = 0; i < VMS_NWIN && v < 0; i++)       /* an empty window, */
+    if (p->rcOff[i] < 0) v = i;
+  if (v < 0)                                    /* else the least recently used */
+    for (v = 0, i = 1; i < VMS_NWIN; i++)
+      if (p->rcUse[i] < p->rcUse[v]) v = i;
+  len = p->dEof - w;
+  if (len > VMS_XFER) len = VMS_XFER;
+  len = (len + VMS_BLOCK - 1) / VMS_BLOCK * VMS_BLOCK;
+  if (len <= 0) { *pst = SS$_ENDOFFILE; return -1; }
+  *pst = blockIo(p, 0, p->rcache + (i64) v * VMS_XFER, len, w);
+  if (!(*pst & 1)) { p->rcOff[v] = -1; return -1; }
+  p->rcOff[v] = w;
+  p->rcLen[v] = (int) len;
+  p->rcUse[v] = ++p->rcClock;
+  return v;
+}
+
+/* A new read transaction on the database: keep the cache only if no other
+** process has committed since it was filled. */
+static void cacheValidate(VmsFile *p)
+{
+  unsigned st;
+  if (!p->rcache) return;
+  if (p->dEof < 28) { cacheDropAll(p); p->counterValid = 0; return; }
+  st = blockIo(p, 0, p->io->edge, VMS_BLOCK, 0);
+  if (!(st & 1) || !p->counterValid || memcmp(p->counter, p->io->edge + 24, 4)) cacheDropAll(p);
+  if (st & 1) { memcpy(p->counter, p->io->edge + 24, 4); p->counterValid = 1; }
+  else p->counterValid = 0;
+}
+
+/* After our own commit: our writes already dropped the windows they touched,
+** so the cache matches the file under its new counter. */
+static void cacheRemember(VmsFile *p)
+{
+  unsigned st;
+  if (!p->rcache || p->dEof < 28) return;
+  st = blockIo(p, 0, p->io->edge, VMS_BLOCK, 0);
+  if (st & 1) { memcpy(p->counter, p->io->edge + 24, 4); p->counterValid = 1; }
+  else { cacheDropAll(p); p->counterValid = 0; }
+}
+
 static int vmsRead(sqlite3_file *id, void *buf, int amt, i64 off)
 {
   VmsFile *p = (VmsFile *) id;
   i64 end = off + amt, first, last, have;
   char *dst = buf;
   unsigned st;
+  int rc;
 
+  nXRead++;
+  if (p->wLen && off < p->wOff + p->wLen && end > p->wOff &&
+      (rc = flushWbuf(p)) != SQLITE_OK) return rc;
   if (end > p->eof && !p->eofDirty) {          /* the header may know better */
     st = readAttr(p);
     if (!(st & 1)) return vmsError(p, SQLITE_IOERR_READ, st, "read attributes");
@@ -368,6 +508,27 @@ static int vmsRead(sqlite3_file *id, void *buf, int amt, i64 off)
   have = p->eof - off;
   if (have <= 0) { memset(buf, 0, amt); return SQLITE_IOERR_SHORT_READ; }
   if (have > amt) have = amt;
+  /* pages and smaller pieces: through the cache */
+  if (have <= VMS_XFER && !p->rcache) {
+    p->rcache = sqlite3_malloc(VMS_NWIN * VMS_XFER);
+    if (p->rcache) cacheDropAll(p);
+  }
+  if (have <= VMS_XFER && p->rcache) {
+    while (have > 0) {
+      i64 w = off - off % VMS_XFER, k;
+      int i = cacheWindow(p, w, &st);
+      if (i < 0) {
+        if (st == SS$_ENDOFFILE) break;
+        return vmsError(p, SQLITE_IOERR_READ, st, "read");
+      }
+      k = w + p->rcLen[i] - off;
+      if (k > have) k = have;
+      if (k <= 0) break;
+      memcpy(dst, p->rcache + (i64) i * VMS_XFER + (off - w), k);
+      dst += k; off += k; have -= k;
+    }
+    goto done;
+  }
   /* head: a partial first block */
   first = off - off % VMS_BLOCK;
   if (off != first || have < VMS_BLOCK) {
@@ -392,6 +553,7 @@ static int vmsRead(sqlite3_file *id, void *buf, int amt, i64 off)
     memcpy(dst, p->io->edge, have);
     dst += have;
   }
+done:
   if (dst - (char *) buf < amt) {
     memset(dst, 0, amt - (dst - (char *) buf));
     return SQLITE_IOERR_SHORT_READ;
@@ -404,34 +566,30 @@ static unsigned editBlock(VmsFile *p, const char *src, int n, i64 off)
 {
   i64 b = off - off % VMS_BLOCK;
   unsigned st = SS$_NORMAL;
-  if (b < p->eof) st = blockIo(p, 0, p->io->edge, VMS_BLOCK, b);
+  if (b < p->dEof) st = blockIo(p, 0, p->io->edge, VMS_BLOCK, b);
   else memset(p->io->edge, 0, VMS_BLOCK);
   if (!(st & 1)) return st;
-  if (b < p->eof && p->eof - b < VMS_BLOCK)    /* bytes past the end of file are zeros */
-    memset(p->io->edge + (p->eof - b), 0, VMS_BLOCK - (p->eof - b));
+  if (b < p->dEof && p->dEof - b < VMS_BLOCK)  /* bytes past the end of file are zeros */
+    memset(p->io->edge + (p->dEof - b), 0, VMS_BLOCK - (p->dEof - b));
   memcpy(p->io->edge + (off - b), src, n);
   return blockIo(p, 1, p->io->edge, VMS_BLOCK, b);
 }
 
-static int vmsWrite(sqlite3_file *id, const void *buf, int amt, i64 off)
+/* Write to the disk now. */
+static int writeThrough(VmsFile *p, const char *src, int amt, i64 off)
 {
-  VmsFile *p = (VmsFile *) id;
-  const char *src = buf;
   i64 end = off + amt, mid;
   unsigned st;
   int rc;
 
-  if (!p->eofDirty && off > p->eof) {          /* writing past our end: refresh it */
-    st = readAttr(p);
-    if (!(st & 1)) return vmsError(p, SQLITE_IOERR_WRITE, st, "read attributes");
-  }
+  if (p->rcache) cacheDrop(p, off < p->dEof ? off : p->dEof, end - (off < p->dEof ? off : p->dEof));
   rc = allocate(p, (unsigned) ((end + VMS_BLOCK - 1) / VMS_BLOCK));
   if (rc) return rc;
-  if (off > p->eof) {
+  if (off > p->dEof) {
     /* a gap past the end: newly allocated blocks hold whatever was on the
     ** disk, so write zeros up to off */
     static const char z[VMS_XFER];
-    i64 g = p->eof, gend = off - off % VMS_BLOCK;
+    i64 g = p->dEof, gend = off - off % VMS_BLOCK;
     if (g % VMS_BLOCK) {                        /* the rest of the old last block */
       int k = VMS_BLOCK - (int) (g % VMS_BLOCK);
       if (g + k > off) k = (int) (off - g);
@@ -445,7 +603,7 @@ static int vmsWrite(sqlite3_file *id, const void *buf, int amt, i64 off)
       if (!(st & 1)) return vmsError(p, SQLITE_IOERR_WRITE, st, "write");
       g += n;
     }
-    if (g > p->eof) p->eof = g;                 /* editBlock below sees zeros past here */
+    if (g > p->dEof) p->dEof = g;               /* editBlock below sees zeros past here */
   }
   /* head */
   if (off % VMS_BLOCK || amt < VMS_BLOCK) {
@@ -467,7 +625,45 @@ static int vmsWrite(sqlite3_file *id, const void *buf, int amt, i64 off)
     st = editBlock(p, src, amt, off);
     if (!(st & 1)) return vmsError(p, SQLITE_IOERR_WRITE, st, "write");
   }
+  if (end > p->dEof) p->dEof = end;
   if (end > p->eof) { p->eof = end; p->eofDirty = 1; }
+  return SQLITE_OK;
+}
+
+static int flushWbuf(VmsFile *p)
+{
+  int n = p->wLen;
+  if (!n) return SQLITE_OK;
+  p->wLen = 0;
+  return writeThrough(p, p->wbuf, n, p->wOff);
+}
+
+static int vmsWrite(sqlite3_file *id, const void *buf, int amt, i64 off)
+{
+  VmsFile *p = (VmsFile *) id;
+  int rc;
+  nXWrite++;
+
+  if (p->wLen && off == p->wOff + p->wLen && p->wLen + amt <= VMS_WBUF) {
+    memcpy(p->wbuf + p->wLen, buf, amt);       /* continues the buffer */
+    p->wLen += amt;
+    goto buffered;
+  }
+  if ((rc = flushWbuf(p)) != SQLITE_OK) return rc;
+  if (!p->eofDirty && off > p->eof) {          /* writing past our end: refresh it */
+    unsigned st = readAttr(p);
+    if (!(st & 1)) return vmsError(p, SQLITE_IOERR_WRITE, st, "read attributes");
+  }
+  /* start a buffer, unless this leaves a gap past the end (writeThrough zeroes it) */
+  if (amt < VMS_WBUF && off <= p->dEof && (p->wbuf || (p->wbuf = sqlite3_malloc(VMS_WBUF)))) {
+    memcpy(p->wbuf, buf, amt);
+    p->wOff = off;
+    p->wLen = amt;
+    goto buffered;
+  }
+  return writeThrough(p, buf, amt, off);
+buffered:
+  if (off + amt > p->eof) { p->eof = off + amt; p->eofDirty = 1; }
   return SQLITE_OK;
 }
 
@@ -476,11 +672,14 @@ static int vmsTruncate(sqlite3_file *id, i64 size)
   VmsFile *p = (VmsFile *) id;
   unsigned st, keep;
   int rc;
+  if ((rc = flushWbuf(p)) != SQLITE_OK) return rc;
+  if (p->rcache) cacheDropAll(p);
   if (size > p->eof) {                          /* growing: allocate, the blocks are zeroed */
     rc = vmsWrite(id, "", 0, size);
     if (rc) return rc;
   }
   p->eof = size;
+  if (p->dEof > size) p->dEof = size;
   st = writeEof(p);
   if (!(st & 1)) return vmsError(p, SQLITE_IOERR_TRUNCATE, st, "truncate");
   /* give back the allocation past the end; another accessor may prevent it */
@@ -496,8 +695,11 @@ static int vmsSync(sqlite3_file *id, int flags)
 {
   /* XFC writes through: a completed $QIO write is on the disk.  What is left
   ** is the end of file. */
+  VmsFile *p = (VmsFile *) id;
+  int rc = flushWbuf(p);
   (void) flags;
-  return flushEof((VmsFile *) id);
+  if (traceFile) trace("sync %s eof %lld", p->zPath ? p->zPath : "temp", (long long) p->eof);
+  return rc ? rc : flushEof(p);
 }
 
 static int vmsFileSize(sqlite3_file *id, i64 *pSize)
@@ -581,7 +783,19 @@ static int attachLockFile(VmsFile *p)
   return SQLITE_OK;
 }
 
+static int vmsLock2(sqlite3_file *id, int eLock);
 static int vmsLock(sqlite3_file *id, int eLock)
+{
+  VmsFile *p = (VmsFile *) id;
+  int from = p->eLock, rc = vmsLock2(id, eLock);
+  if (traceFile)
+    trace("lock %s %s->%s rc %d (process %s, shared %d)", p->zPath ? p->zPath : "?",
+          lockName(from), lockName(eLock), rc, p->lf ? lockName(p->lf->eLock) : "-",
+          p->lf ? p->lf->nShared : 0);
+  return rc;
+}
+
+static int vmsLock2(sqlite3_file *id, int eLock)
 {
   VmsFile *p = (VmsFile *) id;
   VmsLockFile *lf;
@@ -640,11 +854,12 @@ static int vmsLock(sqlite3_file *id, int eLock)
   goto out;
 
 refreshed:
-  /* a new read transaction: the file may have changed size */
+  /* a new read transaction: the file may have changed size and content */
   if (!p->eofDirty) {
     unsigned st = readAttr(p);
     if (!(st & 1)) rc = vmsError(p, SQLITE_IOERR_RDLOCK, st, "read attributes");
   }
+  if (p->isMainDb) cacheValidate(p);
 out:
   sqlite3_mutex_leave(vfsMutex());
   return rc;
@@ -655,7 +870,12 @@ static int vmsLockRelease(VmsFile *p, int eLock)
   VmsLockFile *lf = p->lf;
   int rc = SQLITE_OK;
   if (!lf || p->eLock <= eLock) return SQLITE_OK;
-  if (p->eLock > SHARED_LOCK) rc = flushEof(p);   /* before others can look */
+  if (p->eLock > SHARED_LOCK) {                 /* before others can look */
+    rc = flushWbuf(p);
+    if (rc == SQLITE_OK) rc = flushEof(p);
+    /* our own commit changed the counter: the cache still matches the file */
+    if (rc == SQLITE_OK && p->isMainDb) cacheRemember(p);
+  }
   sqlite3_mutex_enter(vfsMutex());
   if (p->eLock > SHARED_LOCK) {
     if (eLock == SHARED_LOCK && setShared(lf, F_RDLCK)) rc = SQLITE_IOERR_RDLOCK;
@@ -676,7 +896,15 @@ static int vmsLockRelease(VmsFile *p, int eLock)
 
 static int vmsUnlock(sqlite3_file *id, int eLock)
 {
-  return vmsLockRelease((VmsFile *) id, eLock);
+  VmsFile *p = (VmsFile *) id;
+  int from = p->eLock, rc = vmsLockRelease(p, eLock);
+  if (traceFile && from > eLock) {
+    trace("unlock %s %s->%s rc %d (xRead %lu xWrite %lu, $QIO read %lu write %lu, ACP %lu)",
+          p->zPath ? p->zPath : "?", lockName(from), lockName(eLock), rc, nXRead, nXWrite,
+          nQioR, nQioW, nAcp);
+    nXRead = nXWrite = nQioR = nQioW = nAcp = 0;
+  }
+  return rc;
 }
 
 static int vmsCheckReservedLock(sqlite3_file *id, int *pResOut)
@@ -828,6 +1056,7 @@ static int vmsOpen(sqlite3_vfs *vfs, const char *zName, sqlite3_file *id, int fl
   p->chan = (unsigned short) io->fab.fab$l_stv;
   memcpy(p->fid, io->naml.naml$w_fid, sizeof p->fid);
   p->isReadonly = !rw;
+  p->isMainDb = (flags & SQLITE_OPEN_MAIN_DB) != 0;
   if (zName) {
     char full[VMS_MAXPATH + 1];
     nameNoVersion(io, 1, full, sizeof full);
@@ -842,6 +1071,11 @@ static int vmsOpen(sqlite3_vfs *vfs, const char *zName, sqlite3_file *id, int fl
   }
   if (pOutFlags) *pOutFlags = flags;
   p->base.pMethods = &vmsIoMethods;
+  sqlite3_mutex_enter(vfsMutex());
+  p->pNext = openFiles;
+  if (openFiles) openFiles->pPrev = p;
+  openFiles = p;
+  sqlite3_mutex_leave(vfsMutex());
   return SQLITE_OK;
 }
 
@@ -983,8 +1217,32 @@ static sqlite3_vfs vmsVfs = {
   vmsCurrentTimeInt64
 };
 
+/* At image exit, write what the process has written, as the OS cache would
+** keep it on Unix.  No mutex: other threads may be gone mid-call. */
+static void vmsAtExit(void)
+{
+  VmsFile *p;
+  for (p = openFiles; p; p = p->pNext) {
+    trace("exit: flush %s (%d buffered, eof %s)", p->zPath ? p->zPath : "temp", p->wLen,
+          p->eofDirty ? "dirty" : "clean");
+    if (p->chan && flushWbuf(p) == SQLITE_OK) flushEof(p);
+  }
+}
+
 int sqlite3_os_init(void)
 {
+  static int exitHandler;
+  if (!exitHandler) {
+    const char *t = getenv("VMSSQLITE_TRACE");
+    exitHandler = 1;
+    atexit(vmsAtExit);
+    if (t && *t) {
+      char name[300];
+      snprintf(name, sizeof name, "%sVMSSQLITE_%08X.LOG", t, (unsigned) getpid());
+      traceFile = fopen(name, "w");
+      trace("trace start");
+    }
+  }
   return sqlite3_vfs_register(&vmsVfs, 1);
 }
 

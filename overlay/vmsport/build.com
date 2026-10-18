@@ -136,6 +136,8 @@ $ copy/nolog 'obj'LIBSQLITE3.OLB,'obj'SQLITE3$SHR.EXE 'inst'.LIB]
 $ copy/nolog 'obj'SQLITE3.EXE 'inst'.BIN]
 $ purge/nolog 'inst'...],'obj'
 $ write sys$output "BUILD: ''obj'LIBSQLITE3.OLB, ''obj'SQLITE3.EXE, install tree ''inst']"
+$! the test programs link the library statically: relink them with it
+$ @[.vmsport.test]progs 'comp'
 $ status = 1
 $finish:
 $ write sys$output "BUILD: done"

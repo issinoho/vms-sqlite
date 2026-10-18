@@ -1,0 +1,54 @@
+Subject: mptest: start clients with LIB$SPAWN on OpenVMS
+
+startClient() runs "argv0 db --client N ... &" through system(); VMS has
+no fork and DCL no "&", so the client never ran in the background. On
+__VMS the client runs in a subprocess started by LIB$SPAWN with NOWAIT,
+its arguments quoted to keep their case, its output in
+mptest_client_<N>.log.
+
+--- a/mptest/mptest.c	2026-10-18 19:09:57.385798500 +0100
++++ b/mptest/mptest.c	2026-10-18 19:09:57.402978202 +0100
+@@ -41,6 +41,11 @@
+ #else
+ # include <unistd.h>
+ #endif
++#if defined(__VMS)
++# include <descrip.h>
++# include <clidef.h>
++# include <lib$routines.h>
++#endif
+ #include <errno.h>
+ #include <stdlib.h>
+ #include <string.h>
+@@ -652,7 +657,30 @@
+       zSys = sqlite3_mprintf("%z --vfs \"%s\"", zSys, g.zVfs);
+     }
+     if( g.iTrace>=2 ) logMessage("system('%q')", zSys);
+-#if !defined(_WIN32)
++#if defined(__VMS)
++    {
++      /* VMS has no "&": run the client in a subprocess (LIB$SPAWN NOWAIT),
++      ** each argument quoted so that it keeps its case.  The descriptors'
++      ** strings are static: they must be in 32-bit memory. */
++      static char zCmd[2000], zOut[100];
++      struct dsc$descriptor_s dCmd, dOut;
++      unsigned int flags = CLI$M_NOWAIT;
++      snprintf(zCmd, sizeof(zCmd),
++               "mcr %s \"%s\" \"--client\" \"%d\" \"--trace\" \"%d\"%s%s%s%s",
++               g.argv0, g.zDbFile, iClient, g.iTrace,
++               g.bSqlTrace ? " \"--sqltrace\"" : "", g.bSync ? " \"--sync\"" : "",
++               g.zVfs ? " \"--vfs\" " : "", g.zVfs ? g.zVfs : "");
++      snprintf(zOut, sizeof(zOut), "mptest_client_%d.log", iClient);
++      dCmd.dsc$w_length = (unsigned short)strlen(zCmd);
++      dCmd.dsc$b_dtype = DSC$K_DTYPE_T; dCmd.dsc$b_class = DSC$K_CLASS_S;
++      dCmd.dsc$a_pointer = zCmd;
++      dOut.dsc$w_length = (unsigned short)strlen(zOut);
++      dOut.dsc$b_dtype = DSC$K_DTYPE_T; dOut.dsc$b_class = DSC$K_CLASS_S;
++      dOut.dsc$a_pointer = zOut;
++      rc = lib$spawn(&dCmd, 0, &dOut, &flags, 0, 0, 0, 0, 0, 0, 0, 0, 0);
++      if( !(rc & 1) ) errorMessage("LIB$SPAWN fails with status %%X%08X", rc);
++    }
++#elif !defined(_WIN32)
+     zSys = sqlite3_mprintf("%z &", zSys);
+     rc = system(zSys);
+     if( rc ) errorMessage("system() fails with error code %d", rc);

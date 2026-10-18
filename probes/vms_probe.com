@@ -22,7 +22,7 @@ $   if f$search("fatdef.h") .eqs. "" then -
 $ else
 $   cc/version
 $ endif
-$ probes = "p_misc,p_leak,p_lkns,p_mp,p_qio"
+$ probes = "p_misc,p_leak,p_lkns,p_mp,p_qio,p_xfc"
 $ if p3 .nes. "" then probes = f$edit(p3,"LOWERCASE")
 $ i = 0
 $c_loop:
@@ -54,6 +54,7 @@ $ if f$search("*.step;*") .nes. "" then delete/nolog *.step;*
 $ if f$search("mp_test.db*;*") .nes. "" then delete/nolog mp_test.db*;*
 $ mp :== $'here'p_mp.exe
 $ qio :== $'here'p_qio.exe
+$ xfc :== $'here'p_xfc.exe
 $ i = 0
 $r_loop:
 $ p = f$element(i, ",", probes)
@@ -64,6 +65,7 @@ $ if p .eqs. "p_leak" then run p_leak
 $ if p .eqs. "p_lkns" then run p_lkns
 $ if p .eqs. "p_mp" then gosub two
 $ if p .eqs. "p_qio" then gosub two
+$ if p .eqs. "p_xfc" then gosub two
 $ i = i + 1
 $ goto r_loop
 $!

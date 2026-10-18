@@ -19,7 +19,7 @@ pack=$top/cache/push-$name-$node
 rm -rf "$pack"; mkdir -p "$pack/$remote"
 # The amalgamation is all the VMS build uses; the autoconf files stay here.
 ( cd "$stage" && cp -t "$pack/$remote/" sqlite3.c sqlite3.h sqlite3ext.h shell.c VERSION README.txt ) &&
-    cp -a "$stage/vmsport" "$pack/$remote/"
+    cp -a "$stage/vmsport" "$stage/mptest" "$stage/test" "$pack/$remote/"
 
 
 echo "push: -> $node:[.$(echo "$remote" | tr a-z A-Z)]"

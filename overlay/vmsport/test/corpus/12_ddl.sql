@@ -1,0 +1,22 @@
+-- DDL, constraints, triggers, upsert, returning, generated columns, STRICT, WITHOUT ROWID
+pragma foreign_keys = on;
+create table p(id integer primary key autoincrement, name text unique not null, n integer check(n >= 0) default 0);
+create table c(id integer primary key, pid integer references p(id) on delete cascade, v text, g text generated always as (upper(v)) stored, h int as (length(v)));
+create table s(k text primary key, v any) strict, without rowid;
+create index c_pid on c(pid);
+create view pc as select p.name, count(c.id) as kids from p left join c on c.pid = p.id group by p.name;
+create table log(msg text);
+create trigger p_ins after insert on p begin insert into log values('ins ' || new.name); end;
+create trigger c_upd after update of v on c begin insert into log values('upd ' || old.v || '>' || new.v); end;
+insert into p(name, n) values('a', 1), ('b', 2), ('c', 3) returning id, name;
+insert into c(pid, v) values(1, 'x'), (1, 'y'), (2, 'z');
+update c set v = 'q' where v = 'x' returning id, g, h;
+insert into p(name, n) values('a', 9) on conflict(name) do update set n = n + excluded.n returning name, n;
+insert or ignore into p(name) values('b');
+insert into s values('k1', 1), ('k2', 'two'), ('k3', 3.5), ('k4', x'01');
+select * from pc order by name; select * from log order by rowid; select k, v, typeof(v) from s order by k;
+delete from p where name = 'a'; select count(*) from c; select seq from sqlite_sequence;
+alter table p add column extra text default 'e'; alter table p rename column n to num; alter table c rename to child; alter table p drop column extra;
+select sql from sqlite_schema where type in ('table', 'index', 'view', 'trigger') order by name;
+pragma table_info(p); pragma index_list(child); pragma foreign_key_check;
+vacuum; pragma integrity_check; pragma quick_check;
