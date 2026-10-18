@@ -1,6 +1,7 @@
 # Plan: SQLite for OpenVMS (vms-sqlite)
 
-**Status:** proposed (2026-10-18). Nothing built yet.
+**Status:** Phase 0 done (2026-10-18, `docs/PHASE0.md`); D0-D7 await review. Phase 0 found
+that SQLite needs its own VFS on VMS (D5), which Phase 1 builds.
 
 ## Context
 

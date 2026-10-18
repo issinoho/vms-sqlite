@@ -1,0 +1,82 @@
+
+
+PROBE compiler CLANG, features FEATURES, x86_64 E9.2-4  
+PROBE ODS-5: TRUE
+VSI C++ V10.1-3U1
+clang version 10.0.1 (git@bitbucket.org:vms_software/llvm-10.0.1.git 7c0c038e6a818b5f8f00bb25b95ea589bac2a8cf)
+Build date: 11-12-2025
+Target: x86_64-OpenVMS
+Thread model: posix
+InstalledDir: <device>:[SYS0.SYSCOMMON.][SYSEXE]
+PROBE --- p_misc
+MISC BAD  fstat size of an open file                   fstat 0 after 8192 written, before fsync
+MISC OK   fstat size after fsync                       fstat 8192 after fsync
+MISC OK   ftruncate 8192 -> 4096                       rc 0, fstat 4096, lseek(END) 4096
+MISC OK   pread past end returns 0                     rc 0
+MISC BAD  size after close (pread past end moved EOF?) size 100000 after close
+MISC OK   -journal create/unlink x3 leaves nothing     access after unlink: -1; versions 1
+MISC BAD  O_TRUNC of an existing file keeps 1 version  2 versions
+MISC OK   unlink of an open file                       rc 0 errno 0
+MISC OK   open misc.db-wal (dash in the type)          fd 3
+MISC OK   open Misc.Two.db (two dots, case)            fd 3
+MISC BAD  open(".") for a directory fsync              fd -1 errno 2
+MISC OK   getcwd is a Unix path                        /DISK$USER/USERNAME/VMS_SQLITE/PROBE
+MISC BAD  realpath                                     NULL errno 76
+MISC OK   readlink on a plain file                     rc -1 errno 22 (EINVAL = not a link)
+MISC OK   lstat                                        rc 0
+MISC OK   a temp directory                             TMPDIR=(none); access(/tmp)=0; access(/sys$scratch)=0
+MISC OK   mkdir/rmdir                                  mkdir 0 rmdir 0
+MISC OK   time                                         sizeof(time_t) 4, localtime_r ok
+MISC OK   type sizes                                   sizeof(off_t) 8, long 8, void* 8
+MISC OK   ids                                          geteuid 8388673 getpid 7531 pagesize 8192
+PROBE --- p_leak
+LEAK variant 1 (SQLite, unlock whole file): P0 +5431296 bytes over 5000 cycles = 1086.3 per cycle
+LEAK variant 2 (SQLite, unlock SHARED range): P0 +3080192 bytes over 5000 cycles = 616.0 per cycle
+LEAK variant 3 (exact pairs, 510 bytes): P0 +0 bytes over 5000 cycles = 0.0 per cycle
+LEAK variant 4 (exact pairs, 1 byte): P0 +0 bytes over 5000 cycles = 0.0 per cycle
+LEAK variant 5 (convert read->write, exact unlock): P0 +802816 bytes over 5000 cycles = 160.6 per cycle
+PROBE --- p_lkns
+LKNS fcntl F_RDLCK: 0
+LKNS own $ENQ (user mode, no LCK$M_SYSTEM): %X00000001 / %X0001
+LKNS own $ENQ with LCK$M_SYSTEM: %X00000001 / %X0001
+LKNS lock 8000021C: namespace 00030080 (group, group 200, mode 3) state 00010303 name SQLITE_PROBE_OWN
+LKNS lock 80000430: namespace 80030000 (SYSTEM-WIDE, group 0, mode 3) state 00010404 name C$__<device>FE400220100
+LKNS lock 80000431: namespace 80030000 (SYSTEM-WIDE, group 0, mode 3) state 00010303 name C$__<device>FE400220100
+LKNS lock 800009AB: namespace 80030000 (SYSTEM-WIDE, group 0, mode 3) state 00010303 name SQLITE_PROBE_SYS
+LKNS lock 80000ABB: namespace 80030000 (SYSTEM-WIDE, group 0, mode 3) state 00010303 name C$__<device>F9000E0100
+LKNS lock 80000D42: namespace 80030000 (SYSTEM-WIDE, group 0, mode 3) state 00010303 name C$__<device>F9000E0100
+(other processes' locks omitted)
+LKNS end %X00000A08
+PROBE --- p_mp
+b OK   T0 second process opens the file O_RDWR        fd 3 errno 0
+b OK   T1 write lock PENDING byte (no conflict)       rc 0
+b OK   T1 write lock SHARED range refused             rc -1 errno 13 (want -1 EAGAIN/EACCES)
+b BAD  T2 read after the other process's write+fsync  byte 100 is 'A' (A wrote 'a')
+b OK   T4 ftruncate to 4096                           rc 0
+b OK   T5b see the other process's store              word 10 = 4242 (A stored 4242)
+a OK   T1 read lock SHARED range (0x40000002,510)     rc 0 errno 0
+a BAD  T2 read after the other process's write+fsync  byte 100 is 'a' (B wrote 'b')
+a BAD  T2b same, read under a fresh read lock         byte 100 is 'a'
+a OK   T3 size after the other process extended it    fstat 12288, lseek(END) 8192 (expect 12288)
+a BAD  T3b read the other process's new page          pread rc 0 byte '-'
+a OK   T4 size after the other process's ftruncate    fstat 4096, lseek(END) 8197 (expect 4096)
+a OK   T5 mmap MAP_SHARED 32 KB                       8001C000 errno 0
+a OK   T5b see the other process's store              word 20 = 1717 (B stored 1717)
+PROBE --- p_qio
+b OK   Q6 C RTL descriptor for locks                fd 3, lock rc 0 errno 0
+b OK   Q0 second process sees EOF                   size 8192
+b OK   Q1 see the other process's write             byte 100 'a' (A wrote 'a')
+b OK   Q2 extend + set EOF 12288                    %X00000001
+b OK   Q3 set EOF 4096                              %X00000001
+Record format:      Undefined, maximum 0 bytes, longest 32767 bytes
+a OK   Q0 extend to 16 blocks                       %X00000001
+a OK   Q0 set EOF 8192                              set %X00000001, read back 8192
+a OK   Q1 see the other process's write             byte 100 'b' (B wrote 'b')
+a OK   Q2 size + data after the other's extend      size 12288, byte 8197 'B'
+a OK   Q3 size after the other's shrink             size 4096
+a OK   Q5 4 KB reads                                3497 reads/s
+a OK   Q5 4 KB writes                               1923 writes/s
+a: dassgn %X00000001
+a: step 8 seen
+a BAD  Q4/Q6 size after both close (8192 = stale EOF written) stat() 8192
+PROBE end

@@ -1,0 +1,12 @@
+select sqlite_version();
+create table t(a integer, b real, c text);
+insert into t values(1,1.5,'x'),(2,2.5,'y'),(3,3.0,'z'),(null,null,null);
+select 'SUM', sum(a), sum(b), 'AVG', avg(a), avg(b), 'TOTAL', total(a), total(b), 'COUNT', count(*), count(a) from t;
+select 'MINMAX', min(a), max(b), group_concat(c, ',') from t;
+select 'MATH', 1.0/3, round(2.675, 2), 9223372036854775807, -9223372036854775808, 1e308*10, cast('3.14abc' as real);
+select 'PRINTF', printf('%.3f|%e|%g|%d|%x', 3.14159, 12345.678, 0.0001, 1234567890123, 255);
+select 'DATE', date('2026-10-18', '+1 month'), julianday('2000-01-01'), strftime('%s', '2026-01-01 00:00:00');
+select 'JSON', json_extract('{"a":[1,2,{"b":3}]}', '$.a[2].b'), json_array(1, 2.5, 'x');
+select 'WINDOW', a, sum(a) over (order by a) from t where a is not null;
+with recursive c(n) as (select 1 union all select n+1 from c where n<100000) select 'CTE', count(*), sum(n), avg(n) from c;
+pragma integrity_check;
