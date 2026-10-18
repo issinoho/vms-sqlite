@@ -1,7 +1,8 @@
 # Plan: SQLite for OpenVMS (vms-sqlite)
 
-**Status:** Phase 1 done (2026-10-18, `docs/PHASE1.md`), awaiting review; D0-D7 approved. Phase 0 found
-that SQLite needs its own VFS on VMS (D5); Phase 1 built it and the libraries.
+**Status:** Phase 2 in progress, paused 2026-10-18 (`docs/PHASE2.md`, "Resume here"); Phases 0
+and 1 done, D0-D7 approved. Phase 0 found that SQLite needs its own VFS on VMS (D5); Phase 1
+built it, Phase 2 made it pass mptest, the corpus and the kill test.
 
 ## Context
 
