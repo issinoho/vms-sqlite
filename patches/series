@@ -2,3 +2,4 @@
 0002-shell-fwrite-one-element-vms.patch
 0003-mptest-lib-spawn-vms.patch
 0004-mptest-config01-vms-vfs.patch
+0005-math-sqrt-correctly-rounded-vms.patch

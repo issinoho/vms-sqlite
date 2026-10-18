@@ -60,7 +60,10 @@ $!  clang reads no text libraries: the starlet headers it lacks come from SYS$LI
 $   if f$search("[.VMSPORT]INCLUDE.DIR") .eqs. "" then create/directory [.VMSPORT.INCLUDE]
 $   if f$search("[.VMSPORT.INCLUDE]FATDEF.H") .eqs. "" then -
         library/extract=fatdef/output=[.VMSPORT.INCLUDE]FATDEF.H sys$library:sys$lib_c.tlb
-$   dl = "-O2 -I. -Ivmsport/include"
+$!  -fno-math-errno: sqrt() as the SSE instruction, correctly rounded; the
+$!  C RTL's sqrt(2) is one unit off in the last place (corpus 02_math), and
+$!  SQLite never reads errno after a math call
+$   dl = "-O2 -fno-math-errno -I. -Ivmsport/include"
 $   i = 0
 $d_loop:
 $   o = f$element(i, ",", opts)

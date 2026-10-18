@@ -33,5 +33,20 @@ for f in "$stage"/vmsport/test/corpus/*.sql; do
         sed -i 's/\r$//' "$res/vms/$n.$x"
     done
 done
-diff -r "$res/host" "$res/vms" > "$res/diff.txt" && echo "corpus: $comp identical to the host ($(ls "$res/host" | grep -c out) scripts)" ||
+# expected differences (vmsport/test/corpus/known-differences.txt) applied to a
+# copy of the host's output: anything else is reported
+mkdir -p "$res/expect"; cp -f "$res"/host/* "$res/expect/"
+python3 -I - "$stage/vmsport/test/corpus/known-differences.txt" "$res/expect" <<'PY'
+import sys
+known, d = sys.argv[1], sys.argv[2]
+for line in open(known):
+    line = line.split('#')[0].split('   --')[0].strip()
+    if not line: continue
+    f, n, v = line.split(':', 2)
+    path = d + '/' + f
+    rows = open(path).read().split('\n')
+    rows[int(n) - 1] = v
+    open(path, 'w').write('\n'.join(rows))
+PY
+diff -r "$res/expect" "$res/vms" > "$res/diff.txt" && echo "corpus: $comp identical to the host ($(ls "$res/host" | grep -c out) scripts, known differences applied)" ||
     { echo "corpus: $comp differs from the host:"; diffstat < "$res/diff.txt" 2>/dev/null || grep -c '^[<>]' "$res/diff.txt"; }

@@ -1,0 +1,3 @@
+# Results that differ from the host (Linux, glibc) for a known reason.
+# file:line:the VMS output   -- the reason
+02_math.out:5:1.3169578969248166   -- acosh(2), C RTL libm: 0.61 ulp from the true value, glibc 0.39 ulp (libm functions need not be correctly rounded)

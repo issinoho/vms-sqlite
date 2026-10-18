@@ -1,0 +1,35 @@
+Subject: math: sqrt() correctly rounded on OpenVMS (clang)
+
+The OpenVMS C RTL's sqrt() is not correctly rounded as IEEE 754 requires:
+sqrt(2) returns 1.4142135623730949 where the correctly rounded result is
+1.4142135623730952.  SQLite registers sqrt by its address, so the
+compiler cannot substitute the instruction.  On VMS with clang the SQL
+function uses __builtin_sqrt, the SSE sqrtsd instruction (with
+-fno-math-errno it never calls the library).
+
+--- a/sqlite3.c	2026-10-18 23:11:58.286545346 +0100
++++ b/sqlite3.c	2026-10-18 23:11:58.347545089 +0100
+@@ -136834,6 +136834,14 @@
+ */
+ static double degToRad(double x){ return x*(M_PI/180.0); }
+ static double radToDeg(double x){ return x*(180.0/M_PI); }
++#if defined(__VMS) && defined(__clang__)
++/* The OpenVMS C RTL's sqrt() is not correctly rounded (sqrt(2) comes out
++** one unit off in the last place); the SSE instruction is. */
++static double vmsSqrt(double x){ return __builtin_sqrt(x); }
++# define SQLITE_MATH_SQRT vmsSqrt
++#else
++# define SQLITE_MATH_SQRT sqrt
++#endif
+ 
+ /*
+ ** Implementation of 1-argument SQL math functions:
+@@ -137801,7 +137809,7 @@
+     MFUNCTION(asinh,             1, asinh,     math1Func   ),
+     MFUNCTION(atanh,             1, atanh,     math1Func   ),
+ #endif
+-    MFUNCTION(sqrt,              1, sqrt,      math1Func   ),
++    MFUNCTION(sqrt,              1, SQLITE_MATH_SQRT, math1Func ),
+     MFUNCTION(radians,           1, degToRad,  math1Func   ),
+     MFUNCTION(degrees,           1, radToDeg,  math1Func   ),
+     MFUNCTION(pi,                0, 0,         piFunc      ),
