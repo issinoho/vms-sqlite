@@ -1,0 +1,18 @@
+Subject: mutex: pthreads on OpenVMS, which builds with SQLITE_OS_OTHER
+
+OpenVMS uses its own VFS (vmsport/os_vms.c) under SQLITE_OS_OTHER=1,
+because the C RTL's file descriptors are not coherent between processes.
+The mutex selection then falls back to SQLITE_MUTEX_NOOP, although the
+C RTL has POSIX threads: choose SQLITE_MUTEX_PTHREADS on __VMS too.
+
+--- a/sqlite3.c
++++ b/sqlite3.c
+@@ -18603,7 +18603,7 @@
+ # define SQLITE_MUTEX_OMIT
+ #endif
+ #if SQLITE_THREADSAFE && !defined(SQLITE_MUTEX_NOOP)
+-#  if SQLITE_OS_UNIX || defined(__CYGWIN__)
++#  if SQLITE_OS_UNIX || defined(__CYGWIN__) || defined(__VMS)
+ #    define SQLITE_MUTEX_PTHREADS
+ #  elif SQLITE_OS_WIN
+ #    define SQLITE_MUTEX_W32

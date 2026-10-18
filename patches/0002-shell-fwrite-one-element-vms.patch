@@ -1,0 +1,23 @@
+Subject: shell: write query output as one fwrite element on OpenVMS
+
+cli_write() wrote with fwrite(z, 1, n, out).  On a record-oriented file
+(SYS$OUTPUT to a terminal or a DCL /OUTPUT file) the C RTL writes each
+element as its own record, so every character of a result came out on
+a line of its own.  Write the n bytes as one element instead.
+
+--- a/shell.c	2026-10-18 17:18:38.040982325 +0100
++++ b/shell.c	2026-10-18 17:18:38.065935796 +0100
+@@ -25427,7 +25427,13 @@
+     nData = sqlite3_fprintf(out, "%.*s", nData, zData);
+ #endif
+   }else{
++#ifdef __VMS
++    /* the C RTL writes each element as a record to record files (a
++    ** terminal, a DCL /OUTPUT file): one element of nData bytes */
++    nData = nData>0 && fwrite(zData, nData, 1, out)!=1 ? 0 : nData;
++#else
+     nData = (int)fwrite(zData, 1, nData, out);
++#endif
+   }
+   return nData;
+ }
