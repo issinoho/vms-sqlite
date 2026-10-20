@@ -64,6 +64,7 @@ $ if p .eqs. "p_misc" then run p_misc
 $ if p .eqs. "p_leak" then run p_leak
 $ if p .eqs. "p_lkns" then run p_lkns
 $ if p .eqs. "p_cost" then run p_cost
+$ if p .eqs. "p_acclk" then run p_acclk
 $ if p .eqs. "p_mp" then gosub two
 $ if p .eqs. "p_qio" then gosub two
 $ if p .eqs. "p_xfc" then gosub two
@@ -87,6 +88,7 @@ $r_done:
 $ if f$search("*.step;*") .nes. "" then delete/nolog *.step;*
 $ if f$search("*_test.db*;*") .nes. "" then delete/nolog *_test.db*;*
 $ if f$search("cost_test.lck;*") .nes. "" then delete/nolog cost_test.lck;*
+$ if f$search("acc*.db;*") .nes. "" then delete/nolog acc*.db;*
 $ write sys$output "PROBE end"
 $ if f$trnlnm("DECC$FILE_SHARING","LNM$PROCESS") .nes. "" then -
     deassign/process DECC$FILE_SHARING
