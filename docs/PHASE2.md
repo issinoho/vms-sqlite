@@ -4,7 +4,7 @@
 
 ## Resume here
 
-State at the pause (commit c839e63 and the hand-off commit after it):
+State at the pause (2026-10-20, after the read-transaction work, D8):
 - D0-D7 approved; Phases 0 and 1 done (`PHASE0.md`, `PHASE1.md`); nothing pushed and no
   GitHub repository yet (create/push only when the user asks).
 - The node's work directory is `[.VMS_SQLITE]` (nodes.conf); the staged tree there is
@@ -12,9 +12,10 @@ State at the pause (commit c839e63 and the hand-off commit after it):
   build predates the block cache and patch 0005: rebuild it first, `tools/build.sh x86 ALL CC`).
 - The x86 node also runs the user's live board (lighttpd, MariaDB, PHP pool): read-only for us.
 - Next steps, in order:
-  1. **speedtest1**: compare `docs/speedtest1-vms-clang.txt` with `docs/speedtest1-host.txt`
-     per test; trace one slow test (`VMSSQLITE_TRACE`) for its `$QIO` counts; candidates are
-     more cache windows, bigger read-ahead, fewer ACP calls (EOF reads at every transaction).
+  1. **speedtest1** (in progress): the time is per read transaction, not I/O volume (D8).
+     Done: no ACP calls per read transaction (D8 (1)); 182.4 s -> 132.5 s. Waiting for the
+     user: how to cut the two `xAccess` calls (D8 (2), recommendation (b)). Then: test 110
+     "Open and use the database 75 times" (~42 ms per open: trace the open path).
   2. **VSI C variant**: rebuild, then CORPUS, MPTEST, KILLTEST, VFS_TEST, CONCURRENT with `CC`.
   3. **WAL**: implement xShm* (mmap MAP_SHARED of `-shm` works, p_mp T5; locks on spaced
      bytes of the lock file; the block cache must not be used for a WAL-mode database), or
@@ -32,7 +33,8 @@ State at the pause (commit c839e63 and the hand-off commit after it):
 | `KILLTEST.COM`: a writer stopped with STOP/ID at random moments | 20/20 consistent with `synchronous=NORMAL`, 20/20 with `FULL`; hot journals rolled back |
 | `threadtest4` (10 threads, shared cache): default, `-serialized`, `-multithread` | 3 × 1,533 tests, 0 errors |
 | `vfs_test`, `concurrent.com` (4 writers + reader) | 0 failures, no P0 growth; 4,000 rows, no torn snapshot (11 s) |
-| `speedtest1 --size 25` | 182.4 s on VMS against 4.5 s on the host (`docs/speedtest1-*.txt`) |
+| `speedtest1 --size 25` | 132.5 s on VMS (182.4 s before D8 (1)) against 4.5 s on the host (`docs/speedtest1-*.txt`) |
+| all of the above again after D8 (1) (2026-10-20) | mptest 965 tests, 0 errors (crash01 also 3 more runs); KILLTEST 20/20; corpus identical; VFS_TEST, CONCURRENT ok |
 
 ## VFS changes in this phase (PORTING_LOG #13-#18)
 
@@ -42,10 +44,14 @@ State at the pause (commit c839e63 and the hand-off commit after it):
   dead process's writes surviving, as in the Unix page cache). STOP/ID remains a power failure.
 - `VMSSQLITE_TRACE`: per-process lock and I/O trace.
 - Patch 0005: the SQL `sqrt` is correctly rounded (the C RTL's is one unit off).
+- The end of file is read once per lock, not at all when block 1 shows the same counter and
+  size (D8 (1), PORTING_LOG #19: the counter alone is wrong after a hot-journal rollback).
+- `probes/p_cost.c`: what each primitive costs (ACP ~0.62 ms, `$QIO` read 0.28 ms, fcntl pair
+  0.16 ms, failed `sys$open` 1.15 ms); `VMSSQLITE_TRACE` also logs end-of-file decisions.
 
 ## To do
 
-- `speedtest1`: look at which tests dominate the 40x (per-test times are in the files).
+- `speedtest1`: D8 (2), the `xAccess` calls; then the open path (test 110).
 - The VSI C variant: corpus, mptest, kill test.
 - WAL (shared memory), or `SQLITE_OMIT_WAL` (D4).
 - The cross-group lock test (D5), with the user.

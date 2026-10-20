@@ -39,6 +39,16 @@
 **    (bytes 24-27, which SQLite increments on every commit) is unchanged.
 **    WAL would need another rule: there the cache must go.
 **
+**  - An ACP call costs ~0.6 ms (p_cost).  While this connection holds a lock
+**    on the database no other process can change it, so the end of file is
+**    read from the header once per lock (and not at all when block 1 shows
+**    the same change counter and size, sameFile), then known (eofLocked).
+**    The counter alone is not enough: a hot journal's rollback restores it
+**    while truncating the file.  A writer killed in a cache spill may have
+**    extended the file without a commit: the end of file is read again
+**    before this connection writes (RESERVED, or EXCLUSIVE to roll back its
+**    journal).
+**
 **  - RMS and ACP control blocks have 32-bit address fields; they live in a
 **    per-file block allocated in 32-bit memory (VmsIo).  $QIOW takes 64-bit
 **    buffer addresses, so pages move to and from SQLite's buffers directly.
@@ -141,6 +151,7 @@ struct VmsFile {
   i64 eof;                          /* end of file, including buffered writes */
   i64 dEof;                         /* end of what is on the disk */
   int eofDirty;                     /* eof not yet written to the header */
+  int eofLocked;                    /* eof current: we hold a lock (database) */
   char *wins;                       /* the cache: VMS_NWIN windows, then scratch */
   char *scratch;                    /*   one window's worth, for filling */
   i64 winOff[VMS_NWIN];             /*   window offsets, -1 empty */
@@ -549,6 +560,27 @@ static int ensureValid(VmsFile *p, int i, u64 mask)
   return SQLITE_OK;
 }
 
+/* Is the file as this connection last saw it?  One $QIO, no ACP call.
+** The change counter alone does not tell: rolling back a hot journal puts
+** the old page 1, counter included, back and truncates what the dead
+** writer added.  So the header's page count (bytes 28-31, valid when bytes
+** 92-95 match the counter) times its page size must also be our end of
+** file.  (A dead writer's additions not yet rolled back can leave our end of
+** file short; SQLite rolls back before it reads, and writeLock reads it.) */
+static int sameFile(VmsFile *p)
+{
+  const unsigned char *h = (const unsigned char *) p->io->edge;
+  unsigned st, pgsz;
+  i64 nPage;
+  if (!p->wins || !p->counterValid || p->dEof < 100) return 0;
+  st = blockIo(p, 0, p->io->edge, VMS_BLOCK, 0);
+  if (!(st & 1) || memcmp(p->counter, h + 24, 4) || memcmp(h + 24, h + 92, 4)) return 0;
+  pgsz = (unsigned) h[16] << 8 | h[17];
+  if (pgsz == 1) pgsz = 65536;
+  nPage = (i64) h[28] << 24 | h[29] << 16 | h[30] << 8 | h[31];
+  return nPage * pgsz == p->eof;
+}
+
 /* A new read transaction on the database: keep the cache only if no other
 ** process has committed since it was filled. */
 static void cacheValidate(VmsFile *p)
@@ -582,7 +614,7 @@ static int vmsRead(sqlite3_file *id, void *buf, int amt, i64 off)
   int rc;
 
   nXRead++;
-  if (end > p->eof && !p->eofDirty) {          /* the header may know better */
+  if (end > p->eof && !p->eofDirty && !p->eofLocked) {     /* the header may know better */
     st = readAttr(p);
     if (!(st & 1)) return vmsError(p, SQLITE_IOERR_READ, st, "read attributes");
   }
@@ -685,7 +717,7 @@ static int vmsWrite(sqlite3_file *id, const void *buf, int amt, i64 off)
   int rc;
 
   nXWrite++;
-  if (!p->eofDirty && off > p->eof) {          /* writing past our end: refresh it */
+  if (!p->eofDirty && !p->eofLocked && off > p->eof) {     /* past our end: refresh it */
     unsigned st = readAttr(p);
     if (!(st & 1)) return vmsError(p, SQLITE_IOERR_WRITE, st, "read attributes");
   }
@@ -722,6 +754,8 @@ static int vmsTruncate(sqlite3_file *id, i64 size)
   unsigned st, keep;
   int rc;
   if ((rc = flushWbuf(p)) != SQLITE_OK) return rc;
+  if (traceFile) trace("truncate %s %lld -> %lld", p->zPath ? p->zPath : "temp", (long long) p->eof,
+                       (long long) size);
   cacheDropAll(p);
   if (size > p->eof) {                          /* growing: allocate, the blocks are zeroed */
     rc = vmsWrite(id, "", 0, size);
@@ -754,7 +788,7 @@ static int vmsSync(sqlite3_file *id, int flags)
 static int vmsFileSize(sqlite3_file *id, i64 *pSize)
 {
   VmsFile *p = (VmsFile *) id;
-  if (!p->eofDirty) {
+  if (!p->eofDirty && !p->eofLocked) {
     unsigned st = readAttr(p);
     if (!(st & 1)) return vmsError(p, SQLITE_IOERR_FSTAT, st, "read attributes");
   }
@@ -844,11 +878,31 @@ static int vmsLock(sqlite3_file *id, int eLock)
   return rc;
 }
 
+/* SHARED -> RESERVED or EXCLUSIVE: this connection will write.  A writer
+** killed in a cache spill (no commit, so the counter is unchanged) may have
+** extended the file: read the end of file again, so that SQLite's rollback
+** of its journal truncates what it added.  The cache holds no dirty blocks
+** of the database here. */
+static int writeLock(VmsFile *p)
+{
+  i64 was = p->eof;
+  unsigned st;
+  if (!p->isMainDb || p->eofDirty) return SQLITE_OK;
+  st = readAttr(p);
+  if (!(st & 1)) return vmsError(p, SQLITE_IOERR_LOCK, st, "read attributes");
+  if (traceFile) trace("write lock: eof %lld -> %lld", (long long) was, (long long) p->eof);
+  if (p->eof != was) cacheDropAll(p);
+  p->eofLocked = 1;
+  return SQLITE_OK;
+}
+
 static int vmsLock2(sqlite3_file *id, int eLock)
 {
   VmsFile *p = (VmsFile *) id;
   VmsLockFile *lf;
-  int rc = SQLITE_OK;
+  int rc = SQLITE_OK, wasReserved;
+  unsigned st;
+  i64 was;
 
   if (p->eLock >= eLock) return SQLITE_OK;
   sqlite3_mutex_enter(vfsMutex());
@@ -885,6 +939,7 @@ static int vmsLock2(sqlite3_file *id, int eLock)
     if (lk(lf, F_WRLCK, RESERVED_BYTE, 1)) { rc = SQLITE_BUSY; goto out; }
     lf->reserved = 1;
     p->eLock = lf->eLock = RESERVED_LOCK;
+    rc = writeLock(p);
     goto out;
   }
   /* EXCLUSIVE (SQLite asks for it from RESERVED, or again from PENDING) */
@@ -899,16 +954,29 @@ static int vmsLock2(sqlite3_file *id, int eLock)
     p->eLock = lf->eLock = PENDING_LOCK;
     goto out;
   }
+  /* not from RESERVED (which read it): from SHARED, to roll back a hot
+  ** journal, or again after a busy PENDING */
+  wasReserved = p->eLock == RESERVED_LOCK;
   p->eLock = lf->eLock = EXCLUSIVE_LOCK;
+  if (!wasReserved) rc = writeLock(p);
   goto out;
 
 refreshed:
   /* a new read transaction: the file may have changed size and content */
-  if (!p->eofDirty) {
-    unsigned st = readAttr(p);
-    if (!(st & 1)) rc = vmsError(p, SQLITE_IOERR_RDLOCK, st, "read attributes");
+  if (p->eofDirty) goto out;
+  if (p->isMainDb && sameFile(p)) {             /* no commit: cache and eof stand */
+    p->eofLocked = 1;
+    goto out;
   }
-  if (p->isMainDb) cacheValidate(p);
+  was = p->eof;
+  st = readAttr(p);
+  if (!(st & 1)) { rc = vmsError(p, SQLITE_IOERR_RDLOCK, st, "read attributes"); goto out; }
+  if (p->isMainDb) {
+    if (traceFile) trace("read lock: eof %lld -> %lld", (long long) was, (long long) p->eof);
+    if (p->eof != was) cacheDropAll(p);         /* blocks past the old end: not zeros */
+    cacheValidate(p);
+    p->eofLocked = 1;
+  }
 out:
   sqlite3_mutex_leave(vfsMutex());
   return rc;
@@ -933,6 +1001,7 @@ static int vmsLockRelease(VmsFile *p, int eLock)
     lf->eLock = SHARED_LOCK;
   }
   if (eLock == NO_LOCK) {
+    p->eofLocked = 0;
     if (--lf->nShared == 0) {
       setShared(lf, 0);
       lf->eLock = NO_LOCK;

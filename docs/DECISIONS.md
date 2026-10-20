@@ -141,3 +141,39 @@ with VSI C V7.7-003 (`/FLOAT=IEEE/IEEE=DENORM/OPTIMIZE`), 3.54.1 gave the host's
 them and for the other recon checks (integers, reals, NULLs, a 100,000-row CTE): no sign of
 the bug with this compiler. The Phase 2 corpus compares every result with the host to catch
 any miscompilation.
+
+## D8. The cost of a read transaction
+
+**Status:** (1) as built (2026-10-20, Phase 2); (2) open, for the user.
+
+speedtest1 spent 149 of its 182 s in tests 410 and 510: 17,500 autocommit SELECTs each,
+~4.3 ms per read transaction where Linux takes ~8 µs. p_cost timed the primitives on the x86
+node: an ACP call ~0.62 ms (reading attributes and looking up a name cost the same), `$QIO`
+read 0.28 ms, fcntl lock+unlock 0.16 ms, `sys$open` of a missing file 1.15 ms (of an existing
+one, 2.7 ms), `access()`/`stat()` 1.3 ms. Per read transaction the VFS made 2 ACP reads of
+the end of file (lock, `xFileSize`), SQLite 2 `xAccess` calls (`-journal` for a hot journal,
+`-wal` in `pagerOpenWalIfPresent`), plus 4 fcntl calls and the counter's `$QIO`.
+
+**(1) The end of file is read once per lock, and not at all when the file is as last seen.**
+While a connection holds SHARED or more no other process can change the database, so
+`xFileSize` and `xRead` use the end of file read when the lock was taken (`eofLocked`). It is
+not read at all if block 1 (already read for the cache's change counter) shows the same
+counter *and* a header page count × page size equal to our end of file. The counter alone
+is not enough: rolling back a hot journal restores page 1, counter included, while
+truncating the file (PORTING_LOG #19, mptest crash01). A dead writer's additions not yet
+rolled back can leave our end of file short; SQLite rolls back before reading, and the end of
+file is read again whenever the connection goes from SHARED to RESERVED or EXCLUSIVE.
+Result: 0 ACP calls per read transaction, ~2.96 ms; speedtest1 132.5 s (was 182.4).
+Alternative: read the header at each lock as before (correct, 1.2 ms slower per transaction).
+
+**(2) The two `xAccess` calls (~2.3 ms of the remaining ~3 ms).** Options:
+- (a) `SQLITE_OMIT_WAL` (the D4 WAL question): no `-wal` check, −1.15 ms.
+- (b) `xAccess` by an ACP lookup of the name in the directory, on a channel assigned to the
+  device, instead of an RMS open: ~0.65 ms each, −1.0 ms for the two; no protocol change.
+- (c) A counter shared between processes (in a mapping of the lock file) that writers bump
+  when they take RESERVED, so a reader can skip the `-journal` check while no writer has
+  run since one was seen absent: −1.15 ms, but the lock file joins the protocol every VMS
+  VFS must follow, and after a power failure a persisted "clean" value must never hide a
+  hot journal. The lock manager can't carry it: without SYSLCK its resources are per UIC
+  group (D5).
+Recommendation: (b), and (a) only as part of the WAL decision.
