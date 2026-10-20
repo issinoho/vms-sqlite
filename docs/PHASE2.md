@@ -13,9 +13,10 @@ State at the pause (2026-10-20, after the read-transaction work, D8):
 - The x86 node also runs the user's live board (lighttpd, MariaDB, PHP pool): read-only for us.
 - Next steps, in order:
   1. **speedtest1** (in progress): the time is per read transaction, not I/O volume (D8).
-     Done: no ACP calls per read transaction (D8 (1)); 182.4 s -> 132.5 s. Waiting for the
-     user: how to cut the two `xAccess` calls (D8 (2), recommendation (b)). Then: test 110
-     "Open and use the database 75 times" (~42 ms per open: trace the open path).
+     Done: no ACP reads of the end of file per read transaction (D8 (1)), `xAccess` by one
+     ACP lookup (D8 (2) (b)); 182.4 s -> 132.5 s -> 101.0 s (2.13 ms per autocommit SELECT,
+     of which ~1.5 ms the two `xAccess` lookups). Next: test 110 "Open and use the database
+     75 times" (~37 ms per open: trace the open path).
   2. **VSI C variant**: rebuild, then CORPUS, MPTEST, KILLTEST, VFS_TEST, CONCURRENT with `CC`.
   3. **WAL**: implement xShm* (mmap MAP_SHARED of `-shm` works, p_mp T5; locks on spaced
      bytes of the lock file; the block cache must not be used for a WAL-mode database), or
@@ -33,8 +34,8 @@ State at the pause (2026-10-20, after the read-transaction work, D8):
 | `KILLTEST.COM`: a writer stopped with STOP/ID at random moments | 20/20 consistent with `synchronous=NORMAL`, 20/20 with `FULL`; hot journals rolled back |
 | `threadtest4` (10 threads, shared cache): default, `-serialized`, `-multithread` | 3 × 1,533 tests, 0 errors |
 | `vfs_test`, `concurrent.com` (4 writers + reader) | 0 failures, no P0 growth; 4,000 rows, no torn snapshot (11 s) |
-| `speedtest1 --size 25` | 132.5 s on VMS (182.4 s before D8 (1)) against 4.5 s on the host (`docs/speedtest1-*.txt`) |
-| all of the above again after D8 (1) (2026-10-20) | mptest 965 tests, 0 errors (crash01 also 3 more runs); KILLTEST 20/20; corpus identical; VFS_TEST, CONCURRENT ok |
+| `speedtest1 --size 25` | 101.0 s on VMS (182.4 s before D8, 132.5 s with D8 (1) alone) against 4.5 s on the host (`docs/speedtest1-*.txt`) |
+| all of the above again after D8 (1), and again after D8 (2) (2026-10-20) | mptest 965 tests, 0 errors (crash01 also 3 more runs); KILLTEST 20/20; corpus identical; VFS_TEST (now with 10 `xAccess` cases), CONCURRENT ok |
 
 ## VFS changes in this phase (PORTING_LOG #13-#18)
 
@@ -48,10 +49,12 @@ State at the pause (2026-10-20, after the read-transaction work, D8):
   size (D8 (1), PORTING_LOG #19: the counter alone is wrong after a hot-journal rollback).
 - `probes/p_cost.c`: what each primitive costs (ACP ~0.62 ms, `$QIO` read 0.28 ms, fcntl pair
   0.16 ms, failed `sys$open` 1.15 ms); `VMSSQLITE_TRACE` also logs end-of-file decisions.
+- `xAccess(EXISTS)` by one ACP lookup for plain names, the RMS open for ODS-5 extended
+  ones (D8 (2) (b), `probes/p_acclk.c`); the trace shows which way each call went.
 
 ## To do
 
-- `speedtest1`: D8 (2), the `xAccess` calls; then the open path (test 110).
+- `speedtest1`: the open path (test 110).
 - The VSI C variant: corpus, mptest, kill test.
 - WAL (shared memory), or `SQLITE_OMIT_WAL` (D4).
 - The cross-group lock test (D5), with the user.

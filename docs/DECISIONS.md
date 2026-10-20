@@ -144,7 +144,8 @@ any miscompilation.
 
 ## D8. The cost of a read transaction
 
-**Status:** (1) as built (2026-10-20, Phase 2); (2) open, for the user.
+**Status:** (1) as built (2026-10-20, Phase 2); (2) option (b) chosen by the user
+(2026-10-20), as built.
 
 speedtest1 spent 149 of its 182 s in tests 410 and 510: 17,500 autocommit SELECTs each,
 ~4.3 ms per read transaction where Linux takes ~8 µs. p_cost timed the primitives on the x86
@@ -177,3 +178,14 @@ Alternative: read the header at each lock as before (correct, 1.2 ms slower per 
   hot journal. The lock manager can't carry it: without SYSLCK its resources are per UIC
   group (D5).
 Recommendation: (b), and (a) only as part of the WAL decision.
+
+**As built, (2) (b):** p_acclk showed the ACP takes a name as the directory holds it, finds it
+whatever its case, and returns the end of file in the same call, but refuses ODS-5's extended
+names (`acc.two.db`: BADFILENAME; a space: BADFILEVER), escaped or not. So `xAccess(EXISTS)`
+uses one ACP lookup (`$PARSE`, `$ASSIGN` of the device, `IO$_ACCESS` by name in the directory,
+`$DASSGN`: ~0.75 ms) when `$PARSE` escaped nothing and the name part has no dot, and the
+spec is no search list, wildcard, node or quoted name; anything else, and any ACP status but
+success or no-such-file, goes to the RMS open as before. SQLite's own names
+(`x.db-journal`, `x.db-wal`) take the fast way. The channel is not kept between calls (it
+would be one more thing holding the device). Result: ~2.13 ms per read transaction;
+speedtest1 101.0 s (132.5 s with (1) alone).

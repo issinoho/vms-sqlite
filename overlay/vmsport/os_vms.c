@@ -113,6 +113,7 @@ typedef struct VmsIo {
   struct NAML naml;
   struct fibdef fib;
   struct dsc$descriptor fibd;
+  struct dsc$descriptor nmd, devd;  /* xAccess's lookup: name, device */
   struct atrdef atr[2];
   FAT fat;
   unsigned short iosb[4];
@@ -1220,6 +1221,66 @@ static int vmsDelete(sqlite3_vfs *vfs, const char *zName, int syncDir)
   return vmsError(0, SQLITE_IOERR_DELETE, st, zName);
 }
 
+/* Does the file exist with data in it?  An RMS open costs ~1.15 ms, and
+** SQLite asks at every read transaction (its "-journal" and "-wal"); one ACP
+** lookup by name in the directory costs ~0.75 ms with the $PARSE and the
+** device channel, and returns the end of file in the same call (p_acclk).
+** The ACP takes a name as the directory holds it, but refuses ODS-5's
+** extended names (more than one dot, spaces: BADFILENAME, BADFILEVER), so
+** only names that $PARSE did not escape and whose name part has no dot go
+** this way.  Returns 1 if it could tell; 0 for the RMS open to decide. */
+static int acpExists(VmsIo *io, int *pExists)
+{
+  unsigned short ch, iosb[4];
+  unsigned st, efblk;
+  char *n = io->dna;                /* free: only temporary files use it */
+  int nn, nt;
+
+  initFab(io);
+  io->fab.fab$l_fop = 0;
+  st = sys$parse(&io->fab);
+  if (!(st & 1)) return 0;
+  if (io->naml.naml$l_fnb & (NAM$M_WILDCARD | NAM$M_SEARCH_LIST | NAM$M_NODE | NAM$M_QUOTED)) return 0;
+  nn = io->naml.naml$l_long_name_size;
+  nt = io->naml.naml$l_long_type_size;
+  if (nn + nt + 2 > VMS_MAXPATH || memchr(io->naml.naml$l_long_name, '^', nn) ||
+      memchr(io->naml.naml$l_long_name, '.', nn) || memchr(io->naml.naml$l_long_type, '^', nt))
+    return 0;
+  memcpy(n, io->naml.naml$l_long_name, nn);
+  memcpy(n + nn, io->naml.naml$l_long_type, nt);
+  memcpy(n + nn + nt, ";0", 2);                 /* the highest version */
+  io->nmd.dsc$w_length = nn + nt + 2;
+  io->nmd.dsc$b_dtype = DSC$K_DTYPE_T;
+  io->nmd.dsc$b_class = DSC$K_CLASS_S;
+  io->nmd.dsc$a_pointer = n;
+  io->devd.dsc$w_length = io->naml.naml$l_long_dev_size;
+  io->devd.dsc$b_dtype = DSC$K_DTYPE_T;
+  io->devd.dsc$b_class = DSC$K_CLASS_S;
+  io->devd.dsc$a_pointer = io->naml.naml$l_long_dev;
+  if (!(sys$assign(&io->devd, &ch, 0, 0, 0) & 1)) return 0;
+  memset(&io->fib, 0, sizeof io->fib);
+  memcpy(&io->fib.fib$w_did, io->naml.naml$w_did, sizeof io->naml.naml$w_did);
+  io->fibd.dsc$w_length = sizeof io->fib;
+  io->fibd.dsc$b_dtype = DSC$K_DTYPE_Z;
+  io->fibd.dsc$b_class = DSC$K_CLASS_S;
+  io->fibd.dsc$a_pointer = (char *) &io->fib;
+  io->atr[0].atr$w_size = ATR$S_RECATTR;
+  io->atr[0].atr$w_type = ATR$C_RECATTR;
+  io->atr[0].atr$l_addr = &io->fat;
+  memset(&io->atr[1], 0, sizeof io->atr[1]);
+  nAcp++;
+  st = sys$qiow(EFN$C_ENF, ch, IO$_ACCESS, (struct _iosb *) io->iosb, 0, 0, &io->fibd, &io->nmd, 0, 0,
+                (__int64) io->atr, 0);
+  if (st & 1) st = io->iosb[0];
+  sys$dassgn(ch);
+  if (st == SS$_NOSUCHFILE) { *pExists = 0; return 1; }
+  if (!(st & 1)) return 0;
+  /* as the unix VFS: an empty file does not "exist" (journals) */
+  efblk = ((unsigned) io->fat.fat$w_efblkh << 16) | io->fat.fat$w_efblkl;
+  *pExists = efblk > 1 || (efblk == 1 && io->fat.fat$w_ffbyte > 0);     /* as readAttr */
+  return 1;
+}
+
 static int vmsAccess(sqlite3_vfs *vfs, const char *zName, int flags, int *pResOut)
 {
   VmsIo *io = alloc32(sizeof *io);
@@ -1232,6 +1293,12 @@ static int vmsAccess(sqlite3_vfs *vfs, const char *zName, int flags, int *pResOu
   rc = setName(io, zName);
   sqlite3_mutex_leave(vfsMutex());
   if (rc) { free(io); return SQLITE_OK; }
+  if (flags == SQLITE_ACCESS_EXISTS && acpExists(io, pResOut)) {
+    if (traceFile) trace("access %s: %d (ACP)", zName, *pResOut);
+    free(io);
+    return SQLITE_OK;
+  }
+  if (traceFile) trace("access %s flags %d (RMS)", zName, flags);
   initFab(io);
   io->fab.fab$l_fop = FAB$M_UFO;
   io->fab.fab$b_fac = FAB$M_GET | FAB$M_BIO | (flags == SQLITE_ACCESS_READWRITE ? FAB$M_PUT : 0);

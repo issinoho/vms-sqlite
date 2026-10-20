@@ -140,6 +140,35 @@ int main(void)
   if (rc || res) fail("delete all versions", rc, res);
   rc = vfs->xDelete(vfs, "vfs_test.db-journal", 0);
   if (rc != SQLITE_IOERR_DELETE_NOENT) fail("delete missing", rc, 0);
+  {
+    /* xAccess: plain names go by one ACP lookup, ODS-5 extended ones (two
+    ** dots) by an RMS open; an empty file does not exist (D8) */
+    static const struct { const char *make; int n; } mk[] = {
+      { "acc_data.db-journal", 100 }, { "acc_empty.db-journal", 0 }, { "acc.two.db-journal", 100 },
+      { "acc.two.db-wal", 0 },
+    };
+    static const struct { const char *name; int want; } ac[] = {
+      { "acc_data.db-journal", 1 }, { "acc_empty.db-journal", 0 }, { "acc_none.db-journal", 0 },
+      { "acc.two.db-journal", 1 }, { "acc.two.db-wal", 0 }, { "acc.none.db-journal", 0 },
+      { "./acc_data.db-journal", 1 }, { "ACC_DATA.DB-JOURNAL", 1 }, { "no_such_dir/acc.db", 0 },
+      { "[.no_such_dir]acc.db", 0 },
+    };
+    int k;
+    for (k = 0; k < 4; k++) {
+      rc = vfs->xOpen(vfs, mk[k].make, f, SQLITE_OPEN_MAIN_JOURNAL | SQLITE_OPEN_CREATE |
+                      SQLITE_OPEN_READWRITE, &out);
+      if (rc) { fail("access: create", rc, k); continue; }
+      if (mk[k].n) { memset(buf, 'J', mk[k].n); f->pMethods->xWrite(f, buf, mk[k].n, 0); }
+      f->pMethods->xClose(f);
+    }
+    for (k = 0; k < 10; k++) {
+      res = -1;
+      rc = vfs->xAccess(vfs, ac[k].name, SQLITE_ACCESS_EXISTS, &res);
+      printf("VFS access %-24s %d\n", ac[k].name, res);
+      if (rc || res != ac[k].want) fail("access", k, res);
+    }
+    for (k = 0; k < 4; k++) vfs->xDelete(vfs, mk[k].make, 0);
+  }
   rc = vfs->xOpen(vfs, 0, f, SQLITE_OPEN_TEMP_DB | SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE |
                   SQLITE_OPEN_DELETEONCLOSE, &out);
   if (rc) fail("temp open", rc, 0);
