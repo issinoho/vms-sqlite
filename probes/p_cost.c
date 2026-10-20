@@ -18,7 +18,10 @@
    C8  ACP lookup by name in the directory (IO$_ACCESS, FIB did + name, on a
        channel assigned to the device): missing file, then existing file
    C9  sys$parse + sys$search, missing file
-   C10 C RTL access(), missing file;  C11 stat(), missing file */
+   C10 C RTL access(), missing file;  C11 stat(), missing file
+   C12 C RTL open(O_RDWR|O_CREAT, "shr=...") + fstat + close of an existing
+       file: what os_vms.c's attachLockFile costs at a connection's first lock
+   C13 the same without fstat;  C14 fstat alone on an open descriptor */
 #include <atrdef.h>
 #include <descrip.h>
 #include <efndef.h>
@@ -220,6 +223,28 @@ int main(void)
     t0 = now();
     for (i = 0; i < N; i++) st = stat("cost_test.db-journal", &sb);
     report("C11", "stat(), no such file", t0, N);
+  }
+
+  {
+    struct stat sb;
+    int f2;
+    t0 = now();
+    for (i = 0; i < N / 4; i++) {
+      f2 = open("cost_test.lck", O_RDWR | O_CREAT, 0, "shr=get,put,upd");
+      if (f2 < 0) { perror("open"); break; }
+      fstat(f2, &sb);
+      close(f2);
+    }
+    report("C12", "open + fstat + close (lock file)", t0, N / 4);
+    t0 = now();
+    for (i = 0; i < N / 4; i++) {
+      f2 = open("cost_test.lck", O_RDWR | O_CREAT, 0, "shr=get,put,upd");
+      close(f2);
+    }
+    report("C13", "open + close (lock file)", t0, N / 4);
+    t0 = now();
+    for (i = 0; i < N; i++) fstat(fd, &sb);
+    report("C14", "fstat", t0, N);
   }
 
   sys$dassgn(chan);
