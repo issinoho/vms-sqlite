@@ -130,6 +130,9 @@ struct VmsLockFile {
   VmsLockFile *next;
   dev_t dev;
   ino_t ino;
+  char *zName;                      /* "<database>-lock" */
+  unsigned short fid[3];            /* its file id, by ACP lookup... */
+  int fidKnown;                     /*   ...if the ACP could tell: else never kept */
   int fd;                           /* C RTL descriptor, for fcntl() only */
   int nRef;                         /* VmsFiles using this record */
   int nShared;                      /* connections holding SHARED or more */
@@ -168,7 +171,8 @@ struct VmsFile {
   unsigned lastStatus;              /* last failing VMS status */
 };
 
-static VmsLockFile *lockFiles;
+static VmsLockFile *lockFiles;     /* in use (nRef > 0) or kept (nRef 0) */
+#define VMS_KEEP_LOCKFILES 8        /* kept open with no connection: at most */
 static VmsFile *openFiles;
 
 /* Diagnostics: with the logical name VMSSQLITE_TRACE naming a directory,
@@ -397,11 +401,13 @@ static unsigned blockIo(VmsFile *p, int write, void *buf, i64 n, i64 off)
 */
 static int vmsLockRelease(VmsFile *p, int eLock);
 static int flushWbuf(VmsFile *p);
+static void freeLockFile(VmsLockFile *lf);
 
 static int vmsClose(sqlite3_file *id)
 {
   VmsFile *p = (VmsFile *) id;
   int rc = flushWbuf(p);
+  if (traceFile) trace("close %s", p->zPath ? p->zPath : "temp");
   if (rc == SQLITE_OK) rc = flushEof(p);
   sqlite3_free(p->wins);
   p->wins = 0;
@@ -414,11 +420,12 @@ static int vmsClose(sqlite3_file *id)
     vmsLockRelease(p, NO_LOCK);
     sqlite3_mutex_enter(vfsMutex());
     if (--p->lf->nRef == 0) {
-      VmsLockFile **pp;
-      for (pp = &lockFiles; *pp && *pp != p->lf; pp = &(*pp)->next) ;
-      if (*pp) *pp = p->lf->next;
-      close(p->lf->fd);
-      sqlite3_free(p->lf);
+      /* keep it for the next connection, if it can be checked, and if not
+      ** too many are kept already */
+      VmsLockFile *k;
+      int nKept = 0;
+      for (k = lockFiles; k; k = k->next) if (k->nRef == 0) nKept++;
+      if (!p->lf->fidKnown || nKept > VMS_KEEP_LOCKFILES) freeLockFile(p->lf);
     }
     sqlite3_mutex_leave(vfsMutex());
     p->lf = 0;
@@ -826,17 +833,55 @@ static int setShared(VmsLockFile *lf, int type)
   return 0;
 }
 
+static int acpLookup(VmsIo *io, unsigned short fid[3]);
+
+static void freeLockFile(VmsLockFile *lf)
+{
+  VmsLockFile **pp;
+  for (pp = &lockFiles; *pp && *pp != lf; pp = &(*pp)->next) ;
+  if (*pp) *pp = lf->next;
+  close(lf->fd);
+  sqlite3_free(lf->zName);
+  sqlite3_free(lf);
+}
+
 /* Attach the process's record for "<database>-lock", opening it if needed.
-** Caller holds the mutex. */
+** Caller holds the mutex.
+**
+** Opening the lock file through the C RTL costs ~8.8 ms (open, fstat; p_cost),
+** at every connection's first lock.  So a record outlives its connections
+** (up to VMS_KEEP_LOCKFILES with none), and is used again if the name still
+** leads to the same file: one ACP lookup (~0.75 ms), comparing file ids.
+** Without that check a lock file deleted and created again while we kept the
+** old one open would leave our locks excluding no one. */
 static int attachLockFile(VmsFile *p)
 {
   char *zLock;
   struct stat st;
   int fd;
   VmsLockFile *lf;
+  unsigned short fid[3] = { 0, 0, 0 };
+  int found = -1;
 
   zLock = sqlite3_mprintf("%s-lock", p->zPath);
   if (!zLock) return SQLITE_NOMEM;
+  for (lf = lockFiles; lf; lf = lf->next)
+    if (lf->fidKnown && !strcmp(lf->zName, zLock)) {
+      /* p->io's RMS fields are free after the open: look the name up with them */
+      if (setName(p->io, zLock) == SQLITE_OK) found = acpLookup(p->io, fid);
+      if (found == 1 && !memcmp(lf->fid, fid, sizeof fid)) {
+        if (traceFile) trace("lock file %s: kept (fid %u,%u,%u)", zLock, fid[0], fid[1], fid[2]);
+        sqlite3_free(zLock);
+        lf->nRef++;
+        p->lf = lf;
+        return SQLITE_OK;
+      }
+      /* not the same file now (or no telling): never use this record again */
+      if (traceFile) trace("lock file %s: replaced (fid %u -> %u, lookup %d)", zLock, lf->fid[0], fid[0], found);
+      lf->fidKnown = 0;
+      if (lf->nRef == 0) freeLockFile(lf);
+      break;
+    }
   /* mode 0: the process's default protection, as RMS gives the database;
   ** "shr": other processes (whatever their C RTL features) share it */
   fd = open(zLock, O_RDWR | O_CREAT, 0, "shr=get,put,upd");
@@ -846,22 +891,27 @@ static int attachLockFile(VmsFile *p)
     sqlite3_free(zLock);
     return SQLITE_IOERR_LOCK;
   }
-  sqlite3_free(zLock);
-  if (fstat(fd, &st)) { close(fd); return SQLITE_IOERR_LOCK; }
+  if (fstat(fd, &st)) { close(fd); sqlite3_free(zLock); return SQLITE_IOERR_LOCK; }
+  /* its file id, to know it again (looked up before open() created it, if it did) */
+  if (found != 1 && setName(p->io, zLock) == SQLITE_OK) found = acpLookup(p->io, fid);
   for (lf = lockFiles; lf; lf = lf->next)
     if (lf->dev == st.st_dev && lf->ino == st.st_ino) break;
   if (lf) {
     close(fd);          /* would drop the process's locks?  no: only lf->fd holds any */
+    sqlite3_free(zLock);
   } else {
     lf = sqlite3_malloc(sizeof *lf);
-    if (!lf) { close(fd); return SQLITE_NOMEM; }
+    if (!lf) { close(fd); sqlite3_free(zLock); return SQLITE_NOMEM; }
     memset(lf, 0, sizeof *lf);
     lf->dev = st.st_dev;
     lf->ino = st.st_ino;
     lf->fd = fd;
+    lf->zName = zLock;
+    if (found == 1) { memcpy(lf->fid, fid, sizeof fid); lf->fidKnown = 1; }
     lf->next = lockFiles;
     lockFiles = lf;
   }
+  if (traceFile) trace("lock file %s: opened (fid %u,%u,%u)", lf->zName, lf->fid[0], lf->fid[1], lf->fid[2]);
   lf->nRef++;
   p->lf = lf;
   return SQLITE_OK;
@@ -1189,6 +1239,7 @@ static int vmsOpen(sqlite3_vfs *vfs, const char *zName, sqlite3_file *id, int fl
     return vmsError(0, SQLITE_CANTOPEN, st, "read attributes");
   }
   if (pOutFlags) *pOutFlags = flags;
+  if (traceFile) trace("open %s flags %#x", zName ? zName : "temp", flags);
   p->base.pMethods = &vmsIoMethods;
   sqlite3_mutex_enter(vfsMutex());
   p->pNext = openFiles;
@@ -1216,6 +1267,7 @@ static int vmsDelete(sqlite3_vfs *vfs, const char *zName, int syncDir)
     if (!(st & 1)) break;
   }
   free(io);
+  if (traceFile) trace("delete %s: %d versions", zName, n);
   if (n > 0) return SQLITE_OK;
   if (st == RMS$_FNF) return SQLITE_IOERR_DELETE_NOENT;
   return vmsError(0, SQLITE_IOERR_DELETE, st, zName);
@@ -1228,24 +1280,25 @@ static int vmsDelete(sqlite3_vfs *vfs, const char *zName, int syncDir)
 ** The ACP takes a name as the directory holds it, but refuses ODS-5's
 ** extended names (more than one dot, spaces: BADFILENAME, BADFILEVER), so
 ** only names that $PARSE did not escape and whose name part has no dot go
-** this way.  Returns 1 if it could tell; 0 for the RMS open to decide. */
-static int acpExists(VmsIo *io, int *pExists)
+** this way.  acpLookup: 1 found (fid, and io->fat, filled), 0 no such
+** file, -1 can't tell (the caller asks RMS).  The name is in io->name. */
+static int acpLookup(VmsIo *io, unsigned short fid[3])
 {
-  unsigned short ch, iosb[4];
-  unsigned st, efblk;
+  unsigned short ch;
+  unsigned st;
   char *n = io->dna;                /* free: only temporary files use it */
   int nn, nt;
 
   initFab(io);
   io->fab.fab$l_fop = 0;
   st = sys$parse(&io->fab);
-  if (!(st & 1)) return 0;
-  if (io->naml.naml$l_fnb & (NAM$M_WILDCARD | NAM$M_SEARCH_LIST | NAM$M_NODE | NAM$M_QUOTED)) return 0;
+  if (!(st & 1)) return -1;
+  if (io->naml.naml$l_fnb & (NAM$M_WILDCARD | NAM$M_SEARCH_LIST | NAM$M_NODE | NAM$M_QUOTED)) return -1;
   nn = io->naml.naml$l_long_name_size;
   nt = io->naml.naml$l_long_type_size;
   if (nn + nt + 2 > VMS_MAXPATH || memchr(io->naml.naml$l_long_name, '^', nn) ||
       memchr(io->naml.naml$l_long_name, '.', nn) || memchr(io->naml.naml$l_long_type, '^', nt))
-    return 0;
+    return -1;
   memcpy(n, io->naml.naml$l_long_name, nn);
   memcpy(n + nn, io->naml.naml$l_long_type, nt);
   memcpy(n + nn + nt, ";0", 2);                 /* the highest version */
@@ -1257,7 +1310,7 @@ static int acpExists(VmsIo *io, int *pExists)
   io->devd.dsc$b_dtype = DSC$K_DTYPE_T;
   io->devd.dsc$b_class = DSC$K_CLASS_S;
   io->devd.dsc$a_pointer = io->naml.naml$l_long_dev;
-  if (!(sys$assign(&io->devd, &ch, 0, 0, 0) & 1)) return 0;
+  if (!(sys$assign(&io->devd, &ch, 0, 0, 0) & 1)) return -1;
   memset(&io->fib, 0, sizeof io->fib);
   memcpy(&io->fib.fib$w_did, io->naml.naml$w_did, sizeof io->naml.naml$w_did);
   io->fibd.dsc$w_length = sizeof io->fib;
@@ -1273,11 +1326,22 @@ static int acpExists(VmsIo *io, int *pExists)
                 (__int64) io->atr, 0);
   if (st & 1) st = io->iosb[0];
   sys$dassgn(ch);
-  if (st == SS$_NOSUCHFILE) { *pExists = 0; return 1; }
-  if (!(st & 1)) return 0;
+  if (st == SS$_NOSUCHFILE) return 0;
+  if (!(st & 1)) return -1;
+  memcpy(fid, &io->fib.fib$w_fid, 3 * sizeof fid[0]);
+  return 1;
+}
+
+/* Does the file exist with data in it?  1 if the ACP could tell. */
+static int acpExists(VmsIo *io, int *pExists)
+{
+  unsigned short fid[3];
+  unsigned efblk;
+  int r = acpLookup(io, fid);
+  if (r < 0) return 0;
   /* as the unix VFS: an empty file does not "exist" (journals) */
   efblk = ((unsigned) io->fat.fat$w_efblkh << 16) | io->fat.fat$w_efblkl;
-  *pExists = efblk > 1 || (efblk == 1 && io->fat.fat$w_ffbyte > 0);     /* as readAttr */
+  *pExists = r && (efblk > 1 || (efblk == 1 && io->fat.fat$w_ffbyte > 0));   /* as readAttr */
   return 1;
 }
 

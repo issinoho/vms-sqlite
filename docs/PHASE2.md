@@ -15,8 +15,9 @@ State at the pause (2026-10-20, after the read-transaction work, D8):
   1. **speedtest1** (in progress): the time is per read transaction, not I/O volume (D8).
      Done: no ACP reads of the end of file per read transaction (D8 (1)), `xAccess` by one
      ACP lookup (D8 (2) (b)); 182.4 s -> 132.5 s -> 101.0 s (2.13 ms per autocommit SELECT,
-     of which ~1.5 ms the two `xAccess` lookups). Next: test 110 "Open and use the database
-     75 times" (~37 ms per open: trace the open path).
+     of which ~1.5 ms the two `xAccess` lookups), then the lock file kept between
+     connections (D8 (3)): 98.3 s; test 110 ~30 ms per open-and-use, of which ~17 ms its 8
+     read transactions. The rest of speedtest1's gap is per-transaction cost (D8).
   2. **VSI C variant**: rebuild, then CORPUS, MPTEST, KILLTEST, VFS_TEST, CONCURRENT with `CC`.
   3. **WAL**: implement xShm* (mmap MAP_SHARED of `-shm` works, p_mp T5; locks on spaced
      bytes of the lock file; the block cache must not be used for a WAL-mode database), or
@@ -34,8 +35,8 @@ State at the pause (2026-10-20, after the read-transaction work, D8):
 | `KILLTEST.COM`: a writer stopped with STOP/ID at random moments | 20/20 consistent with `synchronous=NORMAL`, 20/20 with `FULL`; hot journals rolled back |
 | `threadtest4` (10 threads, shared cache): default, `-serialized`, `-multithread` | 3 × 1,533 tests, 0 errors |
 | `vfs_test`, `concurrent.com` (4 writers + reader) | 0 failures, no P0 growth; 4,000 rows, no torn snapshot (11 s) |
-| `speedtest1 --size 25` | 101.0 s on VMS (182.4 s before D8, 132.5 s with D8 (1) alone) against 4.5 s on the host (`docs/speedtest1-*.txt`) |
-| all of the above again after D8 (1), and again after D8 (2) (2026-10-20) | mptest 965 tests, 0 errors (crash01 also 3 more runs); KILLTEST 20/20; corpus identical; VFS_TEST (now with 10 `xAccess` cases), CONCURRENT ok |
+| `speedtest1 --size 25` | 98.3 s on VMS (182.4 s before D8; 132.5 s after D8 (1), 101.0 s after (2)) against 4.5 s on the host (`docs/speedtest1-*.txt`) |
+| all of the above again after each of D8 (1), (2), (3) (2026-10-20) | mptest 965 tests, 0 errors (crash01 also 3 more runs); KILLTEST 20/20; corpus identical; VFS_TEST (now with 10 `xAccess` cases), CONCURRENT ok |
 
 ## VFS changes in this phase (PORTING_LOG #13-#18)
 
@@ -51,10 +52,11 @@ State at the pause (2026-10-20, after the read-transaction work, D8):
   0.16 ms, failed `sys$open` 1.15 ms); `VMSSQLITE_TRACE` also logs end-of-file decisions.
 - `xAccess(EXISTS)` by one ACP lookup for plain names, the RMS open for ODS-5 extended
   ones (D8 (2) (b), `probes/p_acclk.c`); the trace shows which way each call went.
+- The lock file's record is kept after the last connection and used again after one ACP
+  lookup confirms the file id (D8 (3)); vfs_test 6 renames a kept one.
 
 ## To do
 
-- `speedtest1`: the open path (test 110).
 - The VSI C variant: corpus, mptest, kill test.
 - WAL (shared memory), or `SQLITE_OMIT_WAL` (D4).
 - The cross-group lock test (D5), with the user.

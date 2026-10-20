@@ -145,7 +145,7 @@ any miscompilation.
 ## D8. The cost of a read transaction
 
 **Status:** (1) as built (2026-10-20, Phase 2); (2) option (b) chosen by the user
-(2026-10-20), as built.
+(2026-10-20), as built; (3) as built (2026-10-20).
 
 speedtest1 spent 149 of its 182 s in tests 410 and 510: 17,500 autocommit SELECTs each,
 ~4.3 ms per read transaction where Linux takes ~8 µs. p_cost timed the primitives on the x86
@@ -189,3 +189,17 @@ success or no-such-file, goes to the RMS open as before. SQLite's own names
 (`x.db-journal`, `x.db-wal`) take the fast way. The channel is not kept between calls (it
 would be one more thing holding the device). Result: ~2.13 ms per read transaction;
 speedtest1 101.0 s (132.5 s with (1) alone).
+
+**(3) Opening a database: the lock file is kept.** A connection's first lock opened
+`<db>-lock` through the C RTL (`open` + `fstat`: 8.8 ms, p_cost C12), and the last
+connection closed it, so every open paid it (speedtest1 test 110: ~37 ms per open-and-use).
+Now the process's record for a lock file outlives its connections (at most 8 kept with
+none), and the next connection uses it again if one ACP lookup of the name (as (2)) finds
+the file id it had: ~0.75 ms. A kept lock file can't be deleted (it is open without delete
+sharing: `xDelete` gets RMS$_FLK), but it can be renamed; then the lookup fails, the record
+is dropped and the new file opened (vfs_test 6). Without that check, a process holding a
+renamed lock file would exclude no one. Names the ACP can't look up (ODS-5 extended) are
+never kept. Alternatives: close at the last connection (as before: 8.8 ms per open); keep
+without a check (the rename case corrupts); identify the file by `stat()` (1.3 ms, and
+`st_ino` would have to be mapped to a file id). Result: test 110 2.75 s -> 2.26 s;
+speedtest1 98.3 s.

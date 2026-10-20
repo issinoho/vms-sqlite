@@ -7,6 +7,7 @@
 **   4. the buffers are 64-bit addresses ($QIO takes them directly)
 **   5. P0 growth over 5000 write transactions and 5000 reads (the C RTL
 **      leaks on some fcntl() unlock patterns: docs/PHASE0.md)
+**   6. the lock file kept after the last connection, and dropped once deleted
 ** Prints "VFS: n failures".
 */
 #include "sqlite3.h"
@@ -219,6 +220,35 @@ int main(void)
     }
     vfs->xDelete(vfs, "leak_test.db-lock", 0);
     vfs->xDelete(vfs, "leak_test.db-journal", 0);
+  }
+  /* 6: the lock file outlives its connections.  While kept, it can't be
+  ** deleted (no delete sharing), but it can be renamed: then it must not be
+  ** used again (with VMSSQLITE_TRACE: "opened", "kept" twice, "replaced",
+  ** "opened") */
+  {
+    int k;
+    vfs->xDelete(vfs, "keep_test.db", 0);
+    for (k = 0; k < 4; k++) {
+      sqlite3 *db;
+      char *err = 0;
+      if (k == 3) {
+        rc = vfs->xDelete(vfs, "keep_test.db-lock", 0);
+        printf("VFS keep: delete of the kept lock file: rc %d\n", rc);
+        rc = rename("keep_test.db-lock", "keep_old.db-lock");
+        printf("VFS keep: rename of the kept lock file: rc %d\n", rc);
+        if (rc) fail("keep: rename", rc, 0);
+      }
+      sqlite3_open("keep_test.db", &db);
+      rc = sqlite3_exec(db, k ? "insert into t values(1)" : "create table t(a)", 0, 0, &err);
+      if (rc) fail("keep: exec", rc, k);
+      sqlite3_free(err);
+      sqlite3_close(db);
+    }
+    vfs->xAccess(vfs, "keep_test.db-lock", SQLITE_ACCESS_READWRITE, &res);
+    if (!res) fail("keep: lock file made again", 0, 0);
+    vfs->xDelete(vfs, "keep_test.db", 0);
+    vfs->xDelete(vfs, "keep_test.db-lock", 0);
+    vfs->xDelete(vfs, "keep_old.db-lock", 0);
   }
   printf("VFS: %d failures\n", failures);
   return failures != 0;
