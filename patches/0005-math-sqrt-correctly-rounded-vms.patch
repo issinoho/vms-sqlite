@@ -1,15 +1,21 @@
-Subject: math: sqrt() correctly rounded on OpenVMS (clang)
+Subject: math: sqrt() correctly rounded on OpenVMS
 
 The OpenVMS C RTL's sqrt() is not correctly rounded as IEEE 754 requires:
 sqrt(2) returns 1.4142135623730949 where the correctly rounded result is
-1.4142135623730952.  SQLite registers sqrt by its address, so the
-compiler cannot substitute the instruction.  On VMS with clang the SQL
-function uses __builtin_sqrt, the SSE sqrtsd instruction (with
--fno-math-errno it never calls the library).
+1.4142135623730951 (SQLite prints it 1.4142135623730952), and probe
+p_sqrt finds it one unit off for 25% of random inputs.  SQLite registers
+sqrt by its address, so the compiler cannot substitute the instruction.
 
---- a/sqlite3.c	2026-10-18 23:11:58.286545346 +0100
-+++ b/sqlite3.c	2026-10-18 23:11:58.347545089 +0100
-@@ -136834,6 +136834,14 @@
+On VMS with clang the SQL function uses __builtin_sqrt, the SSE sqrtsd
+instruction (with -fno-math-errno it never calls the library).  VSI C
+has no such builtin: there the C RTL's result is corrected to the nearer
+neighbour by comparing x with the squares of the midpoints, exact in the
+IEEE quad long double (LDBL_MANT_DIG 113 >= 108 needed); p_sqrt: equal
+to sqrtsd on 2,000,000 inputs.
+
+--- a/sqlite3.c	2026-10-20 21:22:02.751005167 +0100
++++ b/sqlite3.c	2026-10-20 21:22:02.814005992 +0100
+@@ -136834,6 +136834,36 @@
  */
  static double degToRad(double x){ return x*(M_PI/180.0); }
  static double radToDeg(double x){ return x*(180.0/M_PI); }
@@ -18,13 +24,35 @@ function uses __builtin_sqrt, the SSE sqrtsd instruction (with
 +** one unit off in the last place); the SSE instruction is. */
 +static double vmsSqrt(double x){ return __builtin_sqrt(x); }
 +# define SQLITE_MATH_SQRT vmsSqrt
-+#else
++#elif defined(__VMS)
++# include <float.h>
++#endif
++#if defined(__VMS) && !defined(__clang__) && LDBL_MANT_DIG>=108
++/* VSI C has no way to ask for the instruction.  The C RTL's result r is
++** within one unit of the root: x is compared with the squares of the
++** midpoints between r and its neighbours.  A midpoint has 54 significant
++** bits, its square at most 108, so in the IEEE quad long double these are
++** exact (and a root is never exactly a midpoint). */
++static double vmsSqrt(double x){
++  double r = sqrt(x);
++  if( x>0 && x<=DBL_MAX ){
++    double dn = nextafter(r, 0), up = nextafter(r, DBL_MAX);
++    long double lx = x;
++    long double lo = ((long double)dn + r)/2, hi = ((long double)r + up)/2;
++    if( lx<lo*lo ) r = dn;
++    else if( lx>hi*hi ) r = up;
++  }
++  return r;
++}
++# define SQLITE_MATH_SQRT vmsSqrt
++#endif
++#ifndef SQLITE_MATH_SQRT
 +# define SQLITE_MATH_SQRT sqrt
 +#endif
  
  /*
  ** Implementation of 1-argument SQL math functions:
-@@ -137801,7 +137809,7 @@
+@@ -137801,7 +137831,7 @@
      MFUNCTION(asinh,             1, asinh,     math1Func   ),
      MFUNCTION(atanh,             1, atanh,     math1Func   ),
  #endif
