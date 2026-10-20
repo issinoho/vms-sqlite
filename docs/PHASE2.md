@@ -4,12 +4,13 @@
 
 ## Resume here
 
-State at the pause (2026-10-20, after the read-transaction work, D8):
-- D0-D7 approved; Phases 0 and 1 done (`PHASE0.md`, `PHASE1.md`); nothing pushed and no
+State at the pause (2026-10-20, after D8 and the VSI C variant):
+- D0-D7 approved; D8 (2) chosen by the user, D8 (1) and (3) as built, for review; Phases 0 and 1 done (`PHASE0.md`, `PHASE1.md`); nothing pushed and no
   GitHub repository yet (create/push only when the user asks).
 - The node's work directory is `[.VMS_SQLITE]` (nodes.conf); the staged tree there is
-  `[.SQLITE-3_54_1]`, built with clang and with VSI C at the last build of each (the VSI C
-  build predates the block cache and patch 0005: rebuild it first, `tools/build.sh x86 ALL CC`).
+  `[.SQLITE-3_54_1]`, built from the current tree with both clang and VSI C.
+- Never run two test jobs in one directory at once (`[.PERF]`, `[.TEST.RUN]`): after a
+  `vms.sh` timeout the remote job goes on (#17, #23).
 - The x86 node also runs the user's live board (lighttpd, MariaDB, PHP pool): read-only for us.
 - Next steps, in order:
   1. **speedtest1** (in progress): the time is per read transaction, not I/O volume (D8).
@@ -18,13 +19,12 @@ State at the pause (2026-10-20, after the read-transaction work, D8):
      of which ~1.5 ms the two `xAccess` lookups), then the lock file kept between
      connections (D8 (3)): 98.3 s; test 110 ~30 ms per open-and-use, of which ~17 ms its 8
      read transactions. The rest of speedtest1's gap is per-transaction cost (D8).
-  2. **VSI C variant**: rebuild, then CORPUS, MPTEST, KILLTEST, VFS_TEST, CONCURRENT with `CC`.
-  3. **WAL**: implement xShm* (mmap MAP_SHARED of `-shm` works, p_mp T5; locks on spaced
+  2. **WAL**: implement xShm* (mmap MAP_SHARED of `-shm` works, p_mp T5; locks on spaced
      bytes of the lock file; the block cache must not be used for a WAL-mode database), or
      decide `SQLITE_OMIT_WAL` with the user (D4).
-  4. **Cross-group lock test** (D5 open point): needs the user to run one worker under an
+  3. **Cross-group lock test** (D5 open point): needs the user to run one worker under an
      unprivileged account in another UIC group.
-  5. Phase 2 report, then stop for the user's review before Phase 3 (PHP).
+  4. Phase 2 report, then stop for the user's review before Phase 3 (PHP).
 
 ## Done (clang)
 
@@ -36,6 +36,8 @@ State at the pause (2026-10-20, after the read-transaction work, D8):
 | `threadtest4` (10 threads, shared cache): default, `-serialized`, `-multithread` | 3 × 1,533 tests, 0 errors |
 | `vfs_test`, `concurrent.com` (4 writers + reader) | 0 failures, no P0 growth; 4,000 rows, no torn snapshot (11 s) |
 | `speedtest1 --size 25` | 98.3 s on VMS (182.4 s before D8; 132.5 s after D8 (1), 101.0 s after (2)) against 4.5 s on the host (`docs/speedtest1-*.txt`) |
+| VSI C (2026-10-20, with D8 (1)-(3)) | corpus identical (patch 0005 extended, #21); mptest 965 tests, 0 errors; KILLTEST 20/20; VFS_TEST, CONCURRENT ok; speedtest1 99.2 s (`docs/speedtest1-vms-cc.txt`) |
+| `threadtest4` again, 9 runs per compiler (#23) | every completed run 0 errors in 1,533 tests; some runs end on `SQLITE_LOCKED` from shared-cache locks (the Phase 2 code too): a timing-sensitive test, not a gate. Linked with kernel threads since |
 | all of the above again after each of D8 (1), (2), (3) (2026-10-20) | mptest 965 tests, 0 errors (crash01 also 3 more runs); KILLTEST 20/20; corpus identical; VFS_TEST (now with 10 `xAccess` cases), CONCURRENT ok |
 
 ## VFS changes in this phase (PORTING_LOG #13-#18)
@@ -57,6 +59,5 @@ State at the pause (2026-10-20, after the read-transaction work, D8):
 
 ## To do
 
-- The VSI C variant: corpus, mptest, kill test.
 - WAL (shared memory), or `SQLITE_OMIT_WAL` (D4).
 - The cross-group lock test (D5), with the user.
