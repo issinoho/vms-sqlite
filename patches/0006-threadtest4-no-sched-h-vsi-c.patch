@@ -1,0 +1,19 @@
+Subject: threadtest4: no <sched.h> with VSI C on OpenVMS
+
+VSI C for OpenVMS has no <sched.h> (%CC-F-NOINCLFILEF), so threadtest4
+does not compile.  Its <pthread.h> defines sched_yield as
+pthread_yield_np, the only thing the test takes from <sched.h>.  clang
+on OpenVMS finds a <sched.h> and is unchanged.
+
+--- a/test/threadtest4.c	2026-10-20 21:24:24.658896253 +0100
++++ b/test/threadtest4.c	2026-10-20 21:24:24.677649363 +0100
+@@ -30,7 +30,9 @@
+ */
+ #include "sqlite3.h"
+ #include <pthread.h>
++#if !defined(__VMS) || defined(__clang__)
+ #include <sched.h>
++#endif  /* VSI C has no <sched.h>; its pthread.h maps sched_yield() */
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>

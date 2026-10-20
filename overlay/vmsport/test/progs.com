@@ -37,7 +37,12 @@ $   cc/prefix=all/names=(as_is,shortened)/include=([])/object='obj'noext.obj [.v
 $ endif
 $ extra = ",''obj'noext.obj"
 $p_link:
-$ link/executable='obj''n'.exe 'obj''n'.obj'extra','obj'libsqlite3.olb/library
+$! threadtest4's threads on kernel threads (both CPUs): its retries of a
+$! locked VACUUM assume threads that run in parallel or are preempted, and
+$! one kernel thread switches only when a thread yields or waits
+$ lopt = ""
+$ if n .eqs. "threadtest4" then lopt = "/threads_enable=(upcalls,multiple_kernel_threads)"
+$ link'lopt'/executable='obj''n'.exe 'obj''n'.obj'extra','obj'libsqlite3.olb/library
 $ write sys$output "PROGS: ''n' ", f$search("''obj'''n'.exe") .nes. ""
 $ i = i + 1
 $ goto p_loop

@@ -3,3 +3,4 @@
 0003-mptest-lib-spawn-vms.patch
 0004-mptest-config01-vms-vfs.patch
 0005-math-sqrt-correctly-rounded-vms.patch
+0006-threadtest4-no-sched-h-vsi-c.patch
