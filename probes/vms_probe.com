@@ -57,6 +57,7 @@ $ qio :== $'here'p_qio.exe
 $ xfc :== $'here'p_xfc.exe
 $ shm :== $'here'p_shm.exe
 $ exitlk :== $'here'p_exitlk.exe
+$ getlk :== $'here'p_getlk.exe
 $ i = 0
 $r_loop:
 $ p = f$element(i, ",", probes)
@@ -76,6 +77,7 @@ $ if p .eqs. "p_qio" then gosub two
 $ if p .eqs. "p_xfc" then gosub two
 $ if p .eqs. "p_shm" then gosub two
 $ if p .eqs. "p_exitlk" then gosub exitlk
+$ if p .eqs. "p_getlk" then gosub two
 $ i = i + 1
 $ goto r_loop
 $!
@@ -110,6 +112,7 @@ $r_done:
 $ if f$search("*.step;*") .nes. "" then delete/nolog *.step;*
 $ if f$search("*_test.db*;*") .nes. "" then delete/nolog *_test.db*;*
 $ if f$search("cost_test.lck;*") .nes. "" then delete/nolog cost_test.lck;*
+$ if f$search("getlk_test.lck;*") .nes. "" then delete/nolog getlk_test.lck;*
 $ if f$search("acc*.db;*") .nes. "" then delete/nolog acc*.db;*
 $ if f$search("mmoff_test.db-shm;*") .nes. "" then delete/nolog mmoff_test.db-shm;*
 $ if f$search("mmgrow_test.db-shm;*") .nes. "" then delete/nolog mmgrow_test.db-shm;*

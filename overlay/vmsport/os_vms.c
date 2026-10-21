@@ -1084,9 +1084,22 @@ static int vmsCheckReservedLock(sqlite3_file *id, int *pResOut)
   int reserved = 0, rc = SQLITE_OK;
   sqlite3_mutex_enter(vfsMutex());
   if (!p->lf && (rc = attachLockFile(p)) != SQLITE_OK) goto out;
-  if (p->lf->eLock > SHARED_LOCK) reserved = 1;
-  else if (lk(p->lf, F_WRLCK, RESERVED_BYTE, 1)) reserved = 1;   /* someone has it */
-  else lk(p->lf, F_UNLCK, RESERVED_BYTE, 1);
+  if (p->lf->eLock > SHARED_LOCK) reserved = 1;   /* this process */
+  else {
+    /* F_GETLK tests without taking anything.  Taking the byte and releasing
+    ** it, as this did, let two processes testing at once (after a writer
+    ** died) each see the other's test as a live writer: SQLite then takes
+    ** the dead writer's hot journal for that writer's own and overwrites it
+    ** (PORTING_LOG #25, p_getlk). */
+    struct flock l;
+    memset(&l, 0, sizeof l);
+    l.l_type = F_WRLCK;
+    l.l_whence = SEEK_SET;
+    l.l_start = RESERVED_BYTE;
+    l.l_len = 1;
+    if (fcntl(p->lf->fd, F_GETLK, &l)) rc = SQLITE_IOERR_CHECKRESERVEDLOCK;
+    else reserved = l.l_type != F_UNLCK;
+  }
 out:
   sqlite3_mutex_leave(vfsMutex());
   *pResOut = reserved;

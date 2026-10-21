@@ -27,7 +27,7 @@ State at the pause (2026-10-20, after D8 and the VSI C variant):
 
 | Test | Result |
 |---|---|
-| `mptest` (patches 0003, 0004): config01, config02, crash01, multiwrite01 | 962 tests, 0 errors |
+| `mptest` (patches 0003, 0004): config01, config02, crash01, multiwrite01 | 962 tests, 0 errors; *but* config02 corrupted ~1 run in 6-13 when repeated, from Phase 1 on (PORTING_LOG #25): fixed 2026-10-21, 14 runs each with clang and VSI C with no corruption since |
 | SQL corpus, 14 scripts, against the host (`tools/corpus.sh`) | identical but for `acosh(2)`'s last bit (libm; `corpus/known-differences.txt`) |
 | `KILLTEST.COM`: a writer stopped with STOP/ID at random moments | 20/20 consistent with `synchronous=NORMAL`, 20/20 with `FULL`; hot journals rolled back |
 | `threadtest4` (10 threads, shared cache): default, `-serialized`, `-multithread` | 3 × 1,533 tests, 0 errors |
