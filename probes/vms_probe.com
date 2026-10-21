@@ -58,6 +58,9 @@ $ xfc :== $'here'p_xfc.exe
 $ shm :== $'here'p_shm.exe
 $ exitlk :== $'here'p_exitlk.exe
 $ getlk :== $'here'p_getlk.exe
+$ cif :== $'here'p_cif.exe
+$ wd = f$parse("[-.SQLITE-3_54_1.OBJ_''f$getsyi("ARCH_NAME")'_CLANG]WAITDONE.EXE")
+$ waitdone :== $'wd'
 $ i = 0
 $r_loop:
 $ p = f$element(i, ",", probes)
@@ -78,6 +81,7 @@ $ if p .eqs. "p_xfc" then gosub two
 $ if p .eqs. "p_shm" then gosub two
 $ if p .eqs. "p_exitlk" then gosub exitlk
 $ if p .eqs. "p_getlk" then gosub two
+$ if p .eqs. "p_cif" then gosub cif
 $ i = i + 1
 $ goto r_loop
 $!
@@ -107,6 +111,50 @@ $ if v .le. 2 then goto x_loop
 $ if f$search("ex_*.step;*") .nes. "" then delete/nolog ex_*.step;*
 $ if f$search("exitlk_test.lck;*") .nes. "" then delete/nolog exitlk_test.lck;*
 $ if f$search("p_exitlk_a.log;*") .nes. "" then delete/nolog p_exitlk_a.log;*
+$ return
+$!
+$! p_cif: 6 processes open one existing file at once, 300 times each,
+$! first all with $CREATE/CIF (as os_vms.c), then all with $OPEN
+$cif:
+$ if f$search("cif_test.db;*") .nes. "" then delete/nolog cif_test.db;*
+$ open/write f cif_test.db
+$ write f "an existing file"
+$ close f
+$ m = "C"
+$c_mode:
+$ if f$search("done_*.txt;*") .nes. "" then delete/nolog done_*.txt;*
+$! a writer changing the file header meanwhile, as SQLite's writers do;
+$! in mode C also two processes calling access() and stat() on the file
+$ spawn/nowait/output='here'p_cif_w.log cif 9 W
+$ spawn/nowait/output='here'p_cif_a8.log cif 8 A
+$ spawn/nowait/output='here'p_cif_a9.log cif 9 A
+$! and two processes making and erasing journals in the same directory
+$ spawn/nowait/output='here'p_cif_j10.log cif 10 J
+$ spawn/nowait/output='here'p_cif_j11.log cif 11 J
+$ k = 1
+$c_spawn:
+$ spawn/nowait/output='here'p_cif_'k'.log cif 'k' 'm'
+$ k = k + 1
+$ if k .le. 5 then goto c_spawn
+$ cif 6 'm'
+$ waitdone 11 300
+$ k = 1
+$c_type:
+$ type p_cif_'k'.log
+$ k = k + 1
+$ if k .le. 5 then goto c_type
+$ type p_cif_w.log
+$ type p_cif_a8.log
+$ type p_cif_a9.log
+$ type p_cif_j10.log
+$ type p_cif_j11.log
+$ if m .eqs. "O" then goto c_end
+$ m = "O"
+$ goto c_mode
+$c_end:
+$ if f$search("done_*.txt;*") .nes. "" then delete/nolog done_*.txt;*
+$ if f$search("p_cif_*.log;*") .nes. "" then delete/nolog p_cif_*.log;*
+$ if f$search("cif_test.db;*") .nes. "" then delete/nolog cif_test.db;*
 $ return
 $r_done:
 $ if f$search("*.step;*") .nes. "" then delete/nolog *.step;*
