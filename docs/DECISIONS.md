@@ -203,3 +203,40 @@ never kept. Alternatives: close at the last connection (as before: 8.8 ms per op
 without a check (the rename case corrupts); identify the file by `stat()` (1.3 ms, and
 `st_ino` would have to be mapped to a file id). Result: test 110 2.75 s -> 2.26 s;
 speedtest1 98.3 s.
+
+## D9. WAL: the C RTL's shared mappings are per UIC group
+
+**Status:** open, for the user (2026-10-21). D4 kept WAL "if it works in Phase 2".
+
+WAL keeps its index in `<db>-shm`, which every process maps and changes in place, growing it
+by 32 KB regions as the WAL grows. p_mp T5 showed one mapping shared between two processes;
+the probes since (p_shm, p_mmoff, p_mmgrow, PORTING_LOG #24) show what lies behind it:
+- `mmap(MAP_SHARED)` of a file makes one global section `C$...<device><file id>` of the
+  file's size at the first mapping. While any process holds a mapping it does not grow:
+  a region added later can't be mapped (`OFFSET_TOO_BIG`) until every process has let go.
+- It is a temporary **group** global section. Processes in different UIC groups (the PHP
+  pool's account and a CLI user, say) each get their own copy of the index: each would see
+  only its own group's WAL frames and checkpoints, and corrupt the database silently. The
+  fcntl locks are system-wide (D5); the shared memory is not.
+- Within a group it works: stores are seen both ways, atomic increments from two processes
+  add up (p_shm W1, W7), and a growing file maps from any 8 KB-aligned offset when nothing
+  holds the section.
+A system-wide section needs SYSGBL for every image (`$CRMPSC` or the C RTL alike): not for a
+shareable image loaded by PHP, as for SYSLCK in D5.
+
+Options:
+- (a) **`SQLITE_OMIT_WAL`** (D4's fallback): rollback journals only, which work across
+  groups (pending D5's cross-group test). `PRAGMA journal_mode=WAL` then leaves the mode
+  as it was. Also removes the `-wal` check from every read transaction (−0.75 ms, D8).
+- (b) **WAL within one UIC group**: the `-shm` made at its full size before the first
+  mapping (e.g. 32 regions, 1 MB: 131,072 WAL frames, far past the default checkpoint at
+  1,000), and a guard against other groups: each process holds a shared fcntl lock on a
+  byte of the lock file numbered by its UIC group, and refuses to open the WAL index
+  (an error, not corruption) while a lock on another group's byte is held. ~400 lines in
+  the VFS plus the cache rules WAL needs (D8's end-of-file and block cache assumptions do
+  not hold while another process checkpoints), and a mode that fails for mixed accounts.
+- (c) WAL with system-wide sections: needs SYSGBL on every image. Not possible for the
+  shareable image.
+Recommendation: (a). phpBB and PHP's `pdo_sqlite` default to rollback journals; WAL's gain
+(readers during a write) does not outweigh a mode that breaks when two accounts share a
+database, which is the case this port exists for.

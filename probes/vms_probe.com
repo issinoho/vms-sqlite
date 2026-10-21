@@ -55,6 +55,7 @@ $ if f$search("mp_test.db*;*") .nes. "" then delete/nolog mp_test.db*;*
 $ mp :== $'here'p_mp.exe
 $ qio :== $'here'p_qio.exe
 $ xfc :== $'here'p_xfc.exe
+$ shm :== $'here'p_shm.exe
 $ i = 0
 $r_loop:
 $ p = f$element(i, ",", probes)
@@ -67,9 +68,12 @@ $ if p .eqs. "p_cost" then run p_cost
 $ if p .eqs. "p_acclk" then run p_acclk
 $ if p .eqs. "p_sqrt" then run p_sqrt
 $ if p .eqs. "p_yield" then run p_yield
+$ if p .eqs. "p_mmoff" then run p_mmoff
+$ if p .eqs. "p_mmgrow" then run p_mmgrow
 $ if p .eqs. "p_mp" then gosub two
 $ if p .eqs. "p_qio" then gosub two
 $ if p .eqs. "p_xfc" then gosub two
+$ if p .eqs. "p_shm" then gosub two
 $ i = i + 1
 $ goto r_loop
 $!
@@ -91,6 +95,8 @@ $ if f$search("*.step;*") .nes. "" then delete/nolog *.step;*
 $ if f$search("*_test.db*;*") .nes. "" then delete/nolog *_test.db*;*
 $ if f$search("cost_test.lck;*") .nes. "" then delete/nolog cost_test.lck;*
 $ if f$search("acc*.db;*") .nes. "" then delete/nolog acc*.db;*
+$ if f$search("mmoff_test.db-shm;*") .nes. "" then delete/nolog mmoff_test.db-shm;*
+$ if f$search("mmgrow_test.db-shm;*") .nes. "" then delete/nolog mmgrow_test.db-shm;*
 $ write sys$output "PROBE end"
 $ if f$trnlnm("DECC$FILE_SHARING","LNM$PROCESS") .nes. "" then -
     deassign/process DECC$FILE_SHARING
