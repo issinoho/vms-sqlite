@@ -195,6 +195,34 @@ static void trace(const char *fmt, ...)
   fputc('\n', traceFile);
   fflush(traceFile);
 }
+/* With VMSSQLITE_ERRORS naming a directory, a process that meets a VFS
+** error writes it, with the VMS status, to <dir>VMSSQLITE_ERR_<pid>.LOG:
+** the file is made at the first error, so nothing changes timing until
+** then (the trace hides races that this can catch).  The shell opens a
+** database before its -cmd options run, so ".log stderr" can miss them. */
+static void errorLog(int rc, const char *msg)
+{
+  static FILE *errFile;
+  static int tried;
+  struct timeval tv;
+  if (!tried) {
+    const char *d = getenv("VMSSQLITE_ERRORS");
+    tried = 1;
+    if (d && *d) {
+      char name[300];
+      snprintf(name, sizeof name, "%sVMSSQLITE_ERR_%08X.LOG", d, (unsigned) getpid());
+      errFile = fopen(name, "a");
+    }
+  }
+  if (!errFile) return;
+  gettimeofday(&tv, 0);
+  if (rc) fprintf(errFile, "%02d:%02d.%03d error %d: %s\n", (int) (tv.tv_sec / 60 % 60),
+                  (int) (tv.tv_sec % 60), (int) (tv.tv_usec / 1000), rc, msg);
+  else fprintf(errFile, "%02d:%02d.%03d note: %s\n", (int) (tv.tv_sec / 60 % 60),
+               (int) (tv.tv_sec % 60), (int) (tv.tv_usec / 1000), msg);
+  fflush(errFile);
+}
+
 static const char *lockName(int e)
 {
   static const char *n[] = { "NONE", "SHARED", "RESERVED", "PENDING", "EXCLUSIVE" };
@@ -228,9 +256,13 @@ static sqlite3_mutex *vfsMutex(void)
 
 static int vmsError(VmsFile *p, int rc, unsigned st, const char *what)
 {
+  char msg[600];
   if (p) p->lastStatus = st;
-  sqlite3_log(rc, "vms: %s: %%X%08X%s%s", what, st, p && p->zPath ? " " : "",
-              p && p->zPath ? p->zPath : "");
+  snprintf(msg, sizeof msg, "%s: %%X%08X%s%s", what, st, p && p->zPath ? " " : "",
+           p && p->zPath ? p->zPath : "");
+  sqlite3_log(rc, "vms: %s", msg);
+  if (traceFile) trace("error %d: %s", rc, msg);
+  else errorLog(rc, msg);
   return rc;
 }
 
@@ -1221,7 +1253,28 @@ static int vmsOpen(sqlite3_vfs *vfs, const char *zName, sqlite3_file *id, int fl
     io->fab.fab$b_rfm = FAB$C_STMLF;
     io->fab.fab$b_rat = FAB$M_CR;
   }
-  st = create ? sys$create(&io->fab) : sys$open(&io->fab);
+  {
+    /* RMS$_FLK, "file currently locked by another user", now and then for
+    ** a database other processes have open and share: CONCURRENT's workers
+    ** met it about one run in 20 at their start (PORTING_LOG #26).  It is
+    ** a moment's lock, not a refusal: retry for up to 2 s. */
+    struct FAB fab0 = io->fab;
+    struct NAML naml0 = io->naml;
+    int tries;
+    for (tries = 0; ; tries++) {
+      st = create ? sys$create(&io->fab) : sys$open(&io->fab);
+      if (st != RMS$_FLK || tries >= 200) break;
+      io->fab = fab0;
+      io->naml = naml0;
+      usleep(10000);
+    }
+    if (tries > 0) {
+      char msg[300];
+      snprintf(msg, sizeof msg, "open %s: RMS$_FLK, %s after %d retries", zName ? zName : "temp",
+               st & 1 ? "opened" : "given up", tries);
+      if (traceFile) trace("%s", msg); else errorLog(0, msg);
+    }
+  }
   if (!(st & 1) && rw && (st == RMS$_PRV || io->fab.fab$l_stv == SS$_NOPRIV) && !temp) {
     /* no write access: open read-only, as the unix VFS does */
     initFab(io);

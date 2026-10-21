@@ -46,7 +46,8 @@ $ write c "$ set noon"
 $ write c "$ define/user sys$input ''here'work.sql"
 $ cmd = "sq"
 $ if mixed .and. (i/2)*2 .ne. i then cmd = "sqc"
-$ write c "$ ''cmd' conc.db ""-cmd"" "".timeout 60000"" ""-cmd"" "".parameter set @w ''i'"""
+$! .log stderr: the VFS's messages (with the VMS status) if anything fails
+$ write c "$ ''cmd' conc.db ""-cmd"" "".log stderr"" ""-cmd"" "".timeout 60000"" ""-cmd"" "".parameter set @w ''i'"""
 $ write c "$ open/write d done_''i'.txt"
 $ write c "$ close d"
 $ close c
@@ -66,5 +67,8 @@ $ i = i + 1
 $ goto l_loop
 $l_done:
 $ sq conc.db "select 'TOTAL', count(*), count(distinct w), sum(n) from t; pragma integrity_check;"
+$! every worker's 1000 rows (200 transactions of 5)
+$ want = n * 1000
+$ sq conc.db "select case when count(*) = ''want' and count(distinct w) = ''n' then 'CONCURRENT: all ''want' rows' else 'CONCURRENT: FAIL, rows missing' end from t;"
 $ directory/size/nohead/notrail
 $ set default 'here'
