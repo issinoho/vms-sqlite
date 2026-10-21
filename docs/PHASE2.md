@@ -5,7 +5,7 @@
 ## Resume here
 
 State at the pause (2026-10-20, after D8 and the VSI C variant):
-- D0-D7 approved; D8 (2) chosen by the user, D8 (1) and (3) as built, for review; Phases 0 and 1 done (`PHASE0.md`, `PHASE1.md`); nothing pushed and no
+- D0-D7 approved; D8 (2) and D9 (no WAL) chosen by the user, D8 (1) and (3) as built, for review; Phases 0 and 1 done (`PHASE0.md`, `PHASE1.md`); nothing pushed and no
   GitHub repository yet (create/push only when the user asks).
 - The node's work directory is `[.VMS_SQLITE]` (nodes.conf); the staged tree there is
   `[.SQLITE-3_54_1]`, built from the current tree with both clang and VSI C.
@@ -19,12 +19,9 @@ State at the pause (2026-10-20, after D8 and the VSI C variant):
      of which ~1.5 ms the two `xAccess` lookups), then the lock file kept between
      connections (D8 (3)): 98.3 s; test 110 ~30 ms per open-and-use, of which ~17 ms its 8
      read transactions. The rest of speedtest1's gap is per-transaction cost (D8).
-  2. **WAL**: implement xShm* (mmap MAP_SHARED of `-shm` works, p_mp T5; locks on spaced
-     bytes of the lock file; the block cache must not be used for a WAL-mode database), or
-     decide `SQLITE_OMIT_WAL` with the user (D4).
-  3. **Cross-group lock test** (D5 open point): needs the user to run one worker under an
+  2. **Cross-group lock test** (D5 open point): needs the user to run one worker under an
      unprivileged account in another UIC group.
-  4. Phase 2 report, then stop for the user's review before Phase 3 (PHP).
+  3. Phase 2 report, then stop for the user's review before Phase 3 (PHP).
 
 ## Done (clang)
 
@@ -59,5 +56,4 @@ State at the pause (2026-10-20, after D8 and the VSI C variant):
 
 ## To do
 
-- WAL (shared memory), or `SQLITE_OMIT_WAL` (D4).
 - The cross-group lock test (D5), with the user.

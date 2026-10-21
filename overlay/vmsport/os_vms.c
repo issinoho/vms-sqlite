@@ -37,7 +37,8 @@
 **    change the database while this one holds a lock, and across
 **    transactions the cache is kept while the database's change counter
 **    (bytes 24-27, which SQLite increments on every commit) is unchanged.
-**    WAL would need another rule: there the cache must go.
+**    This, and eofLocked below, rely on there being no WAL: another process
+**    checkpointing would change the file under a reader's lock.
 **
 **  - An ACP call costs ~0.6 ms (p_cost).  While this connection holds a lock
 **    on the database no other process can change it, so the end of file is
@@ -53,8 +54,9 @@
 **    per-file block allocated in 32-bit memory (VmsIo).  $QIOW takes 64-bit
 **    buffer addresses, so pages move to and from SQLite's buffers directly.
 **
-** Not yet: shared memory for WAL (the methods are version 1, so WAL needs
-** locking_mode=EXCLUSIVE), and loadable extensions.
+** No WAL: the build omits it (SQLITE_OMIT_WAL, D9).  Its shared index would
+** be a C RTL mapping, a global section per UIC group: processes of two
+** groups would each have their own.  No loadable extensions yet (D4).
 */
 #include "sqlite3.h"
 
@@ -1274,7 +1276,7 @@ static int vmsDelete(sqlite3_vfs *vfs, const char *zName, int syncDir)
 }
 
 /* Does the file exist with data in it?  An RMS open costs ~1.15 ms, and
-** SQLite asks at every read transaction (its "-journal" and "-wal"); one ACP
+** SQLite asks at every read transaction (for its "-journal"); one ACP
 ** lookup by name in the directory costs ~0.75 ms with the $PARSE and the
 ** device channel, and returns the end of file in the same call (p_acclk).
 ** The ACP takes a name as the directory holds it, but refuses ODS-5's

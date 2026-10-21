@@ -46,6 +46,7 @@ vms-pcre2 do. IA64 follows the PHP IA64 decision (on hold).
   mapping to fetch pages from.
 - WAL **kept**: `mmap(MAP_SHARED)` of a file works between processes (p_mp T5), which is what
   the `-shm` index needs. Phase 2 tests it; if it fails there, `SQLITE_OMIT_WAL`.
+  *Phase 2: `SQLITE_OMIT_WAL` (D9): the C RTL's shared mapping is per UIC group.*
 - FTS5, R*Tree and the math functions on (JSON is built in); the temporary directory is
   `SYS$SCRATCH`.
 
@@ -206,7 +207,8 @@ speedtest1 98.3 s.
 
 ## D9. WAL: the C RTL's shared mappings are per UIC group
 
-**Status:** open, for the user (2026-10-21). D4 kept WAL "if it works in Phase 2".
+**Status:** option (a), `SQLITE_OMIT_WAL`, chosen by the user (2026-10-21). D4 had kept WAL
+"if it works in Phase 2".
 
 WAL keeps its index in `<db>-shm`, which every process maps and changes in place, growing it
 by 32 KB regions as the WAL grows. p_mp T5 showed one mapping shared between two processes;

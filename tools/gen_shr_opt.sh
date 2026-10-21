@@ -11,7 +11,7 @@ top=$(cd "$(dirname "$0")/.." && pwd)
 list=$stage/vmsport/sqlite3_shr.symbols
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 gcc -c -O0 -w -D__VMS -DSQLITE_OS_OTHER=1 -DSQLITE_THREADSAFE=1 -DSQLITE_DEFAULT_MEMSTATUS=0 \
-    -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_MAX_MMAP_SIZE=0 -DSQLITE_ENABLE_FTS5 \
+    -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_OMIT_WAL -DSQLITE_MAX_MMAP_SIZE=0 -DSQLITE_ENABLE_FTS5 \
     -DSQLITE_ENABLE_RTREE -DSQLITE_ENABLE_MATH_FUNCTIONS "$stage/sqlite3.c" -o "$tmp/s.o"
 nm -g --defined-only "$tmp/s.o" | awk '{print $3}' | sort > "$tmp/exports"
 grep -v '^#' "$list" | awk '{print $1}' | sort > "$tmp/listed"
