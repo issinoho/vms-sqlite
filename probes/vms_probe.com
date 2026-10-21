@@ -56,6 +56,7 @@ $ mp :== $'here'p_mp.exe
 $ qio :== $'here'p_qio.exe
 $ xfc :== $'here'p_xfc.exe
 $ shm :== $'here'p_shm.exe
+$ exitlk :== $'here'p_exitlk.exe
 $ i = 0
 $r_loop:
 $ p = f$element(i, ",", probes)
@@ -74,6 +75,7 @@ $ if p .eqs. "p_mp" then gosub two
 $ if p .eqs. "p_qio" then gosub two
 $ if p .eqs. "p_xfc" then gosub two
 $ if p .eqs. "p_shm" then gosub two
+$ if p .eqs. "p_exitlk" then gosub exitlk
 $ i = i + 1
 $ goto r_loop
 $!
@@ -89,6 +91,20 @@ $ if f$search("qio_test.db") .nes. "" then -
     pipe directory/full qio_test.db | search sys$pipe "End of file","Record format"
 $ type 'p'_a.log
 $ if f$search("''p'_a.log;-1") .nes. "" then purge/nolog 'p'_a.log
+$ return
+$!
+$! p_exitlk: A (subprocess) dies holding a lock; B, here, waits for the lock
+$exitlk:
+$ v = 1
+$x_loop:
+$ if f$search("ex_*.step;*") .nes. "" then delete/nolog ex_*.step;*
+$ spawn/nowait/output='here'p_exitlk_a.log exitlk a 'v'
+$ exitlk b 'v'
+$ v = v + 1
+$ if v .le. 2 then goto x_loop
+$ if f$search("ex_*.step;*") .nes. "" then delete/nolog ex_*.step;*
+$ if f$search("exitlk_test.lck;*") .nes. "" then delete/nolog exitlk_test.lck;*
+$ if f$search("p_exitlk_a.log;*") .nes. "" then delete/nolog p_exitlk_a.log;*
 $ return
 $r_done:
 $ if f$search("*.step;*") .nes. "" then delete/nolog *.step;*
