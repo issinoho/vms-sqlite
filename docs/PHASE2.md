@@ -19,13 +19,7 @@ State at the pause (2026-10-20, after D8 and the VSI C variant):
      of which ~1.5 ms the two `xAccess` lookups), then the lock file kept between
      connections (D8 (3)): 98.3 s; test 110 ~30 ms per open-and-use, of which ~17 ms its 8
      read transactions. The rest of speedtest1's gap is per-transaction cost (D8).
-  2. **Cross-group lock test** (D5 open point), ready (`TEST/CROSSGROUP.COM`, dry-run in one
-     account: all PASS). Needs the user: an account in another UIC group, then
-     `@[.SQLITE-3_54_1.VMSPORT.TEST]CROSSGROUP SETUP <account>` here (makes `[.XGROUP]` in
-     the work directory with ACLs for that account; nothing outside it changes), then
-     `@<work dir>[.XGROUP]CROSSGROUP OTHER` in that account's session and
-     `@[.SQLITE-3_54_1.VMSPORT.TEST]CROSSGROUP OURS` here, at about the same time.
-  3. Phase 2 report, then stop for the user's review before Phase 3 (PHP).
+  2. Phase 2 report, then stop for the user's review before Phase 3 (PHP).
 
 ## Done (clang)
 
@@ -39,6 +33,7 @@ State at the pause (2026-10-20, after D8 and the VSI C variant):
 | `speedtest1 --size 25` | 64.9 s clang, 66.8 s VSI C (70.6 s and 71.1 s before #27's cache and write changes; 182.4 s before D8; 132.5 s after D8 (1), 101.0 s after (2), 98.3 s after (3), ~79 s without WAL, D9) against 4.5 s on the host (`docs/speedtest1-*.txt`) |
 | VSI C (2026-10-20, with D8 (1)-(3)) | corpus identical (patch 0005 extended, #21); mptest 965 tests, 0 errors; KILLTEST 20/20; VFS_TEST, CONCURRENT ok; speedtest1 99.2 s (`docs/speedtest1-vms-cc.txt`) |
 | `threadtest4` again, 9 runs per compiler (#23) | every completed run 0 errors in 1,533 tests; some runs end on `SQLITE_LOCKED` from shared-cache locks (the Phase 2 code too): a timing-sensitive test, not a gate. Linked with kernel threads since |
+| Cross-group (D5): `CROSSGROUP.COM`, the user's account and <test-account>, in UIC groups <group-a> and <group-b> (2026-10-22) | locks exclude both ways (reads and writes `BUSY` while the other holds EXCLUSIVE, let in after); two writers per account at once: 4,000 rows, `integrity_check` ok |
 | all of the above again after each of D8 (1), (2), (3) (2026-10-20) | mptest 965 tests, 0 errors (crash01 also 3 more runs); KILLTEST 20/20; corpus identical; VFS_TEST (now with 10 `xAccess` cases), CONCURRENT ok |
 
 ## VFS changes in this phase (PORTING_LOG #13-#18)
@@ -64,4 +59,3 @@ State at the pause (2026-10-20, after D8 and the VSI C variant):
 
 ## To do
 
-- The cross-group lock test (D5), with the user.

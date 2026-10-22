@@ -121,9 +121,11 @@ exact pairs (PORTING_LOG #7); with the gaps, nothing on any path. Every VMS VFS 
 shares a database must use this layout, so it is fixed from the first kit on. The RMS and
 ACP blocks are allocated with `_malloc32` (clang) and refused above 2 GB (#9).
 
-Open point: one test with two accounts in different UIC groups (e.g. the user's and the
-LIGHTTPD account) that the C RTL's locks exclude across groups too; it needs the user to run
-one side.
+Open point, closed (2026-10-22): the C RTL's locks exclude across UIC groups.
+`TEST/CROSSGROUP.COM` with the user's account (group <group-a>) and <test-account> (group <group-b>),
+one session each: either account holding the database EXCLUSIVE refuses the other's reads
+and writes (`SQLITE_BUSY`) and lets them in after the release, both ways; two writers in each
+account at once wrote all 4,000 rows, `integrity_check` ok.
 
 ## D6. File names and versions
 
