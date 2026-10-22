@@ -77,6 +77,8 @@ $ if f$search("XGROUP.DIR") .eqs. "" then create/directory [.XGROUP]
 $ xdir = f$parse("[.XGROUP]") - ".;"
 $ if f$search("''xdir'*.*;*") .nes. "" then delete/nolog 'xdir'*.*;*
 $ ace = "access=read+write+execute+delete"
+$! replace, not add to, any ACL a previous SETUP (for another account) left
+$ set security/acl/delete=all XGROUP.DIR
 $ set security/acl=((identifier='other','ace'),(identifier='other',options=default,'ace'),-
     (identifier='me',options=default,'ace')) XGROUP.DIR
 $ obj = objbase + "_" + comp + "]"
