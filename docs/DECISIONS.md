@@ -244,3 +244,19 @@ Options:
 Recommendation: (a). phpBB and PHP's `pdo_sqlite` default to rollback journals; WAL's gain
 (readers during a write) does not outweigh a mode that breaks when two accounts share a
 database, which is the case this port exists for.
+
+## D10. How PHP gets the library: the install tree copied to the shared dependency directory
+
+**Status:** chosen by the user (2026-10-22).
+
+vms-php finds every dependency under one directory, its nodes.conf column 8: the work
+directory vms-zlib, vms-pcre2 and vms-libxml2 build in. vms-sqlite builds in its own.
+`tools/deploy.sh <node>` copies the clang install tree (INCLUDE, LIB, BIN) to
+`<depsdir>[.SQLITE-<ver>.INSTALL_X86_64_CLANG]` (column 8 of this project's nodes.conf);
+run after each build that should reach PHP. It copies only; nothing there is deleted.
+vms-php links `LIBSQLITE3.OLB` statically, as it does zlib, pcre2 and libxml2.
+Alternatives: build vms-sqlite in the shared directory (our test directories would move
+there, and everything be rebuilt and retested); give vms-php a second dependency directory
+for SQLite alone (a change to its build for one library). Linking `SQLITE3$SHR` instead of
+the object library would let SQLite be updated without relinking PHP, but needs the image
+installed or a logical name at run time, unlike the other dependencies.
