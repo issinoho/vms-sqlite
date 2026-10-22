@@ -1,5 +1,6 @@
 $! PROGS.COM - build SQLite's test programs against the library:
-$! MPTEST.EXE (multi-process), THREADTEST4.EXE (threads), SPEEDTEST1.EXE.
+$! MPTEST.EXE (multi-process), THREADTEST4.EXE (threads), SPEEDTEST1.EXE,
+$! and our XGLOCK.EXE (CROSSGROUP.COM's lock steps).
 $! P1: CLANG (default) or CC.  Images go to [.OBJ_<arch>_<compiler>].
 $ set noon
 $ set process/parse_style=extended
@@ -11,8 +12,8 @@ $ if comp .eqs. "" then comp = "CLANG"
 $ set default 'here'
 $ set default [--]
 $ obj = f$parse("[.OBJ_''f$getsyi("ARCH_NAME")'_''comp']") - ".;"
-$ progs = "mptest/mptest.c,test/threadtest4.c,test/speedtest1.c"
-$ names = "mptest,threadtest4,speedtest1"
+$ progs = "mptest/mptest.c,test/threadtest4.c,test/speedtest1.c,vmsport/test/xglock.c"
+$ names = "mptest,threadtest4,speedtest1,xglock"
 $ i = 0
 $p_loop:
 $ s = f$element(i, ",", progs)
@@ -24,6 +25,8 @@ $   clang = "$sys$system:clang.exe"
 $   clang -O2 -I. -D_LARGEFILE -D_USE_STD_STAT -pointer-size=argv64 -c 's' -o 'obj''n'.obj
 $ else
 $   vs = "[." + f$element(0, "/", s) + "]" + f$element(1, "/", s)
+$   if f$element(2, "/", s) .nes. "/" then -
+      vs = "[." + f$element(0, "/", s) + "." + f$element(1, "/", s) + "]" + f$element(2, "/", s)
 $   cc/prefix=all/names=(as_is,shortened)/float=ieee/ieee=denorm/include=([])/define=(_LARGEFILE,_USE_STD_STAT) -
         /object='obj''n'.obj 'vs'
 $ endif

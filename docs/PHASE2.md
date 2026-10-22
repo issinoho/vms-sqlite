@@ -19,8 +19,12 @@ State at the pause (2026-10-20, after D8 and the VSI C variant):
      of which ~1.5 ms the two `xAccess` lookups), then the lock file kept between
      connections (D8 (3)): 98.3 s; test 110 ~30 ms per open-and-use, of which ~17 ms its 8
      read transactions. The rest of speedtest1's gap is per-transaction cost (D8).
-  2. **Cross-group lock test** (D5 open point): needs the user to run one worker under an
-     unprivileged account in another UIC group.
+  2. **Cross-group lock test** (D5 open point), ready (`TEST/CROSSGROUP.COM`, dry-run in one
+     account: all PASS). Needs the user: an account in another UIC group, then
+     `@[.SQLITE-3_54_1.VMSPORT.TEST]CROSSGROUP SETUP <account>` here (makes `[.XGROUP]` in
+     the work directory with ACLs for that account; nothing outside it changes), then
+     `@<work dir>[.XGROUP]CROSSGROUP OTHER` in that account's session and
+     `@[.SQLITE-3_54_1.VMSPORT.TEST]CROSSGROUP OURS` here, at about the same time.
   3. Phase 2 report, then stop for the user's review before Phase 3 (PHP).
 
 ## Done (clang)
