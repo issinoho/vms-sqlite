@@ -22,11 +22,13 @@
 **    process (VmsLockFile) holds them for all its connections.
 **
 **  - A $QIO costs ~0.3 ms to read and, as XFC writes through, ~1 ms to
-**    write.  So reads and writes go through a cache per file of VMS_NWIN
-**    windows of 32 KB, each with a valid and a dirty bit per block: a missing
-**    window is read with one $QIO, and the dirty blocks go out as one $QIO
-**    per run when anyone else could look: sync, truncate, close, before a
-**    write lock is released, and when a dirty window is evicted.
+**    write.  So reads and writes go through a cache per file of up to
+**    VMS_NWIN windows of 32 KB (2 MB), allocated as the file's working set
+**    needs them, each with a valid and a dirty bit per block: a missing
+**    window is read with one $QIO, and the dirty blocks go out, one $QIO per
+**    window, when anyone else could look: sync, truncate, close, before a
+**    write lock is released, and when a dirty window is evicted.  (16
+**    windows thrashed on a 1-3 MB transaction: PORTING_LOG #27.)
 **    On Unix a process's writes outlive it in the OS cache, and SQLite relies
 **    on that (synchronous=OFF, a crash mid-transaction): an exit handler
 **    writes every buffer and end of file when the image exits.  STOP/ID runs
@@ -87,7 +89,7 @@
 #define VMS_BLOCK     512
 #define VMS_XFER      32768         /* bytes per $QIO */
 #define VMS_CHUNK     64            /* default extension, blocks */
-#define VMS_NWIN      16            /* cache: windows of VMS_XFER bytes per file */
+#define VMS_NWIN      64            /* cache: windows of VMS_XFER bytes per file, at most */
 #define WIN_BLOCKS    (VMS_XFER / VMS_BLOCK)        /* 64: one bit each */
 
 /* The lock bytes in "<database>-lock".  The unix VFS uses adjacent bytes in
@@ -158,8 +160,9 @@ struct VmsFile {
   i64 dEof;                         /* end of what is on the disk */
   int eofDirty;                     /* eof not yet written to the header */
   int eofLocked;                    /* eof current: we hold a lock (database) */
-  char *wins;                       /* the cache: VMS_NWIN windows, then scratch */
+  char *wins;                       /* the cache: set once it is in use (= scratch) */
   char *scratch;                    /*   one window's worth, for filling */
+  char *win[VMS_NWIN];              /*   the windows, each allocated at its first use */
   i64 winOff[VMS_NWIN];             /*   window offsets, -1 empty */
   unsigned long long winValid[VMS_NWIN], winDirty[VMS_NWIN];   /* a bit per block */
   unsigned winUse[VMS_NWIN], winClock;
@@ -391,23 +394,35 @@ static int flushEof(VmsFile *p)
 }
 
 /* Make sure blocks 1..nblk are allocated. */
+/* Make sure blocks 1..nblk are allocated: one ACP call.  The extension
+** grows with the file (a quarter of it, at least the chunk, at most 32 MB):
+** a growing database extended 32 KB at a time cost three ACP calls each
+** (~2 ms), hundreds per transaction (PORTING_LOG #27).  If another process
+** extended the file meanwhile, ours comes on top of its: more allocated
+** than needed, no harm.  The extension's start and size come back in the
+** FIB, so the new allocation needs no further call. */
 static int allocate(VmsFile *p, unsigned nblk)
 {
-  unsigned st, want;
+  unsigned st, want, min;
   if (nblk <= p->hiblk) return SQLITE_OK;
-  st = acp(p, IO$_ACCESS, 1, 0, 0, 0);          /* another process may have extended */
-  if (st & 1) p->hiblk = ((unsigned) p->io->fat.fat$w_hiblkh << 16) | p->io->fat.fat$w_hiblkl;
-  if (nblk <= p->hiblk) return SQLITE_OK;
-  want = nblk - p->hiblk;
+  min = nblk - p->hiblk;
+  want = p->hiblk / 4;
+  if (want > 65536) want = 65536;
   if (want < (unsigned) p->chunk) want = p->chunk;
+  if (want < min) want = min;
   st = acp(p, IO$_MODIFY, 0, FIB$M_EXTEND, want, 0);
-  if (!(st & 1)) {
-    want = nblk - p->hiblk;                     /* disk nearly full: just what is needed */
+  if (!(st & 1) && want > min) {
+    want = min;                                 /* disk nearly full: just what is needed */
     st = acp(p, IO$_MODIFY, 0, FIB$M_EXTEND, want, 0);
   }
   if (!(st & 1)) return vmsError(p, SQLITE_FULL, st, "extend");
-  st = acp(p, IO$_ACCESS, 1, 0, 0, 0);
-  if (st & 1) p->hiblk = ((unsigned) p->io->fat.fat$w_hiblkh << 16) | p->io->fat.fat$w_hiblkl;
+  if (p->io->fib.fib$l_exvbn && p->io->fib.fib$l_exsz)
+    p->hiblk = p->io->fib.fib$l_exvbn + p->io->fib.fib$l_exsz - 1;
+  else {                                        /* not returned: ask */
+    st = acp(p, IO$_ACCESS, 1, 0, 0, 0);
+    if (st & 1) p->hiblk = ((unsigned) p->io->fat.fat$w_hiblkh << 16) | p->io->fat.fat$w_hiblkl;
+  }
+  if (nblk > p->hiblk) return vmsError(p, SQLITE_FULL, 0, "extend: allocation short");
   return SQLITE_OK;
 }
 
@@ -445,6 +460,7 @@ static int vmsClose(sqlite3_file *id)
   if (rc == SQLITE_OK) rc = flushEof(p);
   sqlite3_free(p->wins);
   p->wins = 0;
+  { int i; for (i = 0; i < VMS_NWIN; i++) { sqlite3_free(p->win[i]); p->win[i] = 0; } }
   sqlite3_mutex_enter(vfsMutex());
   if (p->pPrev) p->pPrev->pNext = p->pNext; else if (openFiles == p) openFiles = p->pNext;
   if (p->pNext) p->pNext->pPrev = p->pPrev;
@@ -484,9 +500,9 @@ static int cacheInit(VmsFile *p)
 {
   int i;
   if (p->wins) return 1;
-  p->wins = sqlite3_malloc(VMS_NWIN * VMS_XFER + VMS_XFER);
+  p->wins = sqlite3_malloc(VMS_XFER);
   if (!p->wins) return 0;
-  p->scratch = p->wins + VMS_NWIN * VMS_XFER;
+  p->scratch = p->wins;
   for (i = 0; i < VMS_NWIN; i++) { p->winOff[i] = -1; p->winValid[i] = p->winDirty[i] = 0; }
   return 1;
 }
@@ -509,12 +525,17 @@ static void cacheDropAll(VmsFile *p)
   for (i = 0; i < VMS_NWIN; i++) p->winOff[i] = -1;
 }
 
-/* Write window i's dirty blocks, one $QIO per run. */
+/* Write window i's dirty blocks: one $QIO from a dirty block through the
+** valid blocks after it to the last dirty one among them.  The clean blocks
+** between go out unchanged: dirty blocks exist only while this process
+** holds the write lock, so the clean ones are what the disk has.  (With
+** 512-byte pages the dirty blocks of a window lie scattered, and a $QIO per
+** run made hundreds of writes per transaction: PORTING_LOG #27.) */
 static int flushWin(VmsFile *p, int i)
 {
-  u64 d = p->winDirty[i];
+  u64 d = p->winDirty[i], v = p->winValid[i];
   i64 w = p->winOff[i];
-  int b, e, last, rc;
+  int b, e, k, last, rc;
   unsigned st;
   if (!d) return SQLITE_OK;
   for (last = WIN_BLOCKS - 1; !(d & BIT(last)); last--) ;
@@ -523,8 +544,9 @@ static int flushWin(VmsFile *p, int i)
   for (b = 0; b < WIN_BLOCKS; b = e) {
     i64 runEnd;
     if (!(d & BIT(b))) { e = b + 1; continue; }
-    for (e = b; e < WIN_BLOCKS && (d & BIT(e)); e++) ;
-    st = blockIo(p, 1, p->wins + (i64) i * VMS_XFER + b * VMS_BLOCK, (i64) (e - b) * VMS_BLOCK,
+    for (e = k = b + 1; k < WIN_BLOCKS && (v & BIT(k)); k++)
+      if (d & BIT(k)) e = k + 1;
+    st = blockIo(p, 1, p->win[i] + b * VMS_BLOCK, (i64) (e - b) * VMS_BLOCK,
                  w + (i64) b * VMS_BLOCK);
     if (!(st & 1)) return vmsError(p, SQLITE_IOERR_WRITE, st, "write");
     runEnd = w + (i64) e * VMS_BLOCK;
@@ -556,11 +578,16 @@ static int cacheWin(VmsFile *p, i64 w, int *pRc)
   int i, v = -1;
   for (i = 0; i < VMS_NWIN; i++)
     if (p->winOff[i] == w) { p->winUse[i] = ++p->winClock; return i; }
+  /* an empty window, else a new one (memory is taken as the file's working
+  ** set needs it, up to VMS_NWIN), else the least recently used */
   for (i = 0; i < VMS_NWIN && v < 0; i++)
-    if (p->winOff[i] < 0) v = i;
+    if (p->winOff[i] < 0 && p->win[i]) v = i;
+  for (i = 0; i < VMS_NWIN && v < 0; i++)
+    if (!p->win[i] && (p->win[i] = sqlite3_malloc(VMS_XFER)) != 0) v = i;
   if (v < 0) {
-    for (v = 0, i = 1; i < VMS_NWIN; i++)
-      if (p->winUse[i] < p->winUse[v]) v = i;
+    for (i = 0; i < VMS_NWIN; i++)
+      if (p->win[i] && (v < 0 || p->winUse[i] < p->winUse[v])) v = i;
+    if (v < 0) { *pRc = SQLITE_IOERR_NOMEM; return -1; }
     if ((*pRc = flushWin(p, v)) != SQLITE_OK) return -1;
   }
   p->winOff[v] = w;
@@ -576,7 +603,7 @@ static int ensureValid(VmsFile *p, int i, u64 mask)
 {
   u64 miss = mask & ~p->winValid[i], disk;
   i64 w = p->winOff[i], nd = (p->dEof - w + VMS_BLOCK - 1) / VMS_BLOCK;
-  char *win = p->wins + (i64) i * VMS_XFER;
+  char *win = p->win[i];
   int b, first, last;
   unsigned st;
   if (!miss) return SQLITE_OK;
@@ -673,7 +700,7 @@ static int vmsRead(sqlite3_file *id, void *buf, int amt, i64 off)
     if ((rc = ensureValid(p, i, nb >= WIN_BLOCKS ? ~(u64) 0 : BIT(nb) - 1)) != SQLITE_OK) return rc;
     k = w + VMS_XFER - off;
     if (k > have) k = have;
-    memcpy(dst, p->wins + (i64) i * VMS_XFER + (off - w), k);
+    memcpy(dst, p->win[i] + (off - w), k);
     dst += k; off += k; have -= k;
   }
   if (dst - (char *) buf < amt) {
@@ -782,7 +809,7 @@ static int vmsWrite(sqlite3_file *id, const void *buf, int amt, i64 off)
     if ((pend - w) % VMS_BLOCK) edges |= BIT(b1);         /*   their old bytes first */
     if (edges && (rc = ensureValid(p, i, edges)) != SQLITE_OK) return rc;
     k = (int) (pend - off);
-    memcpy(p->wins + (i64) i * VMS_XFER + (off - w), src, k);
+    memcpy(p->win[i] + (off - w), src, k);
     for (b = b0; b <= b1; b++) { p->winValid[i] |= BIT(b); p->winDirty[i] |= BIT(b); }
     src += k; off += k; amt -= k;
   }
@@ -807,9 +834,12 @@ static int vmsTruncate(sqlite3_file *id, i64 size)
   if (p->dEof > size) p->dEof = size;
   st = writeEof(p);
   if (!(st & 1)) return vmsError(p, SQLITE_IOERR_TRUNCATE, st, "truncate");
-  /* give back the allocation past the end; another accessor may prevent it */
+  /* give back the allocation past the end, beyond a quarter of what is
+  ** kept (as allocate grows it: a database that shrinks and grows again at
+  ** every commit, as with auto_vacuum, need not be cut and extended each
+  ** time); another accessor may prevent it */
   keep = (unsigned) ((size + VMS_BLOCK - 1) / VMS_BLOCK);
-  if (keep + (unsigned) p->chunk < p->hiblk) {
+  if (keep + (keep / 4 > (unsigned) p->chunk ? keep / 4 : (unsigned) p->chunk) < p->hiblk) {
     st = acp(p, IO$_MODIFY, 0, FIB$M_TRUNC, 0, keep + 1);
     if (st & 1) readAttr(p);
   }

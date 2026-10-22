@@ -32,7 +32,7 @@ State at the pause (2026-10-20, after D8 and the VSI C variant):
 | `KILLTEST.COM`: a writer stopped with STOP/ID at random moments | 20/20 consistent with `synchronous=NORMAL`, 20/20 with `FULL`; hot journals rolled back |
 | `threadtest4` (10 threads, shared cache): default, `-serialized`, `-multithread` | 3 × 1,533 tests, 0 errors |
 | `vfs_test`, `concurrent.com` (4 writers + reader) | 0 failures, no P0 growth; 4,000 rows, no torn snapshot (11 s); a worker's open failed ~1 run in 20 on RMS$_FLK (#26): retried since, 40 runs clean |
-| `speedtest1 --size 25` | 70.6 s clang, 71.1 s VSI C (182.4 s before D8; 132.5 s after D8 (1), 101.0 s after (2), 98.3 s after (3), ~79 s without WAL, D9) against 4.5 s on the host (`docs/speedtest1-*.txt`) |
+| `speedtest1 --size 25` | 64.9 s clang, 66.8 s VSI C (70.6 s and 71.1 s before #27's cache and write changes; 182.4 s before D8; 132.5 s after D8 (1), 101.0 s after (2), 98.3 s after (3), ~79 s without WAL, D9) against 4.5 s on the host (`docs/speedtest1-*.txt`) |
 | VSI C (2026-10-20, with D8 (1)-(3)) | corpus identical (patch 0005 extended, #21); mptest 965 tests, 0 errors; KILLTEST 20/20; VFS_TEST, CONCURRENT ok; speedtest1 99.2 s (`docs/speedtest1-vms-cc.txt`) |
 | `threadtest4` again, 9 runs per compiler (#23) | every completed run 0 errors in 1,533 tests; some runs end on `SQLITE_LOCKED` from shared-cache locks (the Phase 2 code too): a timing-sensitive test, not a gate. Linked with kernel threads since |
 | all of the above again after each of D8 (1), (2), (3) (2026-10-20) | mptest 965 tests, 0 errors (crash01 also 3 more runs); KILLTEST 20/20; corpus identical; VFS_TEST (now with 10 `xAccess` cases), CONCURRENT ok |
@@ -47,6 +47,8 @@ State at the pause (2026-10-20, after D8 and the VSI C variant):
 - Patch 0005: the SQL `sqrt` is correctly rounded (the C RTL's is one unit off).
 - The end of file is read once per lock, not at all when block 1 shows the same counter and
   size (D8 (1), PORTING_LOG #19: the counter alone is wrong after a hot-journal rollback).
+- The cache grows to 64 windows (2 MB) per file as needed; a dirty window goes out in one
+  `$QIO`; files grow by a quarter (#27): config02's client timeouts gone (20 runs).
 - `VMSSQLITE_ERRORS`: a directory for each process's VFS errors only (with the VMS status),
   made at the first error, so timing is untouched (the trace hides races, #26).
 - `probes/p_cost.c`: what each primitive costs (ACP ~0.62 ms, `$QIO` read 0.28 ms, fcntl pair
