@@ -147,8 +147,8 @@ any miscompilation.
 
 ## D8. The cost of a read transaction
 
-**Status:** (1) as built (2026-10-20, Phase 2); (2) option (b) chosen by the user
-(2026-10-20), as built; (3) as built (2026-10-20).
+**Status:** approved by the user (2026-10-22): (1) and (3) as built in Phase 2; (2)
+option (b), chosen by the user (2026-10-20).
 
 speedtest1 spent 149 of its 182 s in tests 410 and 510: 17,500 autocommit SELECTs each,
 ~4.3 ms per read transaction where Linux takes ~8 µs. p_cost timed the primitives on the x86

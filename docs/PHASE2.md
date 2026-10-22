@@ -5,8 +5,8 @@ and VSI C. Nothing pushed, no GitHub repository yet (create/push only when the u
 
 ## Resume here
 
-- D0-D7 approved; D8 (2) and D9 (no WAL) chosen by the user; **D8 (1) and (3) as built, for
-  the user's review**. Phases 0 and 1 done (`PHASE0.md`, `PHASE1.md`).
+- D0-D9 approved (D8 on 2026-10-22, after this report). Phases 0 and 1 done (`PHASE0.md`,
+  `PHASE1.md`); Phase 2 reviewed by the user, Phase 3 started (`PHASE3.md`).
 - The node's work directory is `[.VMS_SQLITE]` (nodes.conf); the staged tree there is
   `[.SQLITE-3_54_1]`, built from the current tree with both compilers. `[.XGROUP]` is
   empty and has no ACL (CROSSGROUP's shared directory).
