@@ -5,7 +5,7 @@ wrapped by the same tooling as `~/projects/vms-php`, `vms-zlib`, `vms-pcre2` and
 sibling ports. Read vms-grep's `CLAUDE.md` for the ground rules and the VMS/ssh pitfalls, and
 vms-mariadb's and vms-php's `CLAUDE.md` for the clang and C RTL ones; they all apply. Read
 the plan (`docs/SQLITE_OPENVMS_PLAN.md`), `docs/DECISIONS.md` and the latest `docs/PHASE<n>.md`
-(its "Resume here" section: now `docs/PHASE3.md`) before starting work. Work phase by phase;
+(its "Resume here" section: now `docs/PHASE5.md`) before starting work. Work phase by phase;
 stop and ask at each phase exit.
 
 **Acceptance:** `sqlite3` and the libraries on x86-64 (clang and VSI C), several processes
@@ -60,6 +60,8 @@ tools/vms.sh x86 dcl '@[.probe]vms_probe CLANG FEATURES [probes]'   # probes (p_
 tools/suite.sh x86 CLANG|CC [quick]              # the whole regression run of a build (~1 h) -> out/suite-*.log
 tools/procs.sh x86                               # our processes on the node: after any timeout or stopped job
 tools/deploy.sh x86                              # copy the clang install tree to the shared deps dir (vms-php, D10)
+tools/kit.sh x86                                 # clang build + PCSI kit -> out/kits/ (D11)
+tools/installcheck.sh x86                        # install, test, remove the kit: system-wide, ask first
 tools/vms.sh x86 dcl '@[.SQLITE-3_54_1.VMSPORT.TEST]SPEEDTEST CLANG|CC'     # speedtest1 --size 25
 tools/vms.sh x86 dcl '@[.SQLITE-3_54_1.VMSPORT.TEST]CROSSGROUP SETUP <account>'  # D5 test: two accounts, see the .COM
 ```
