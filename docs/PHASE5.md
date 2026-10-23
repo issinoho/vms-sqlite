@@ -1,7 +1,8 @@
 # Phase 5: the kit and release (x86-64)
 
-**Status:** in progress (2026-10-23): the kit is built and its install check passes; the
-release is next. Phase 4 is done for x86-64 (the user, 2026-10-23): the VSI C variant was built
+**Status:** done (2026-10-23): the kit passed its install check and is released
+(https://github.com/issinoho/vms-sqlite/releases/tag/v3.54.1-vms1; the downloaded kit matches
+`SHA256SUMS`). Phase 4 is done for x86-64 (the user, 2026-10-23): the VSI C variant was built
 and tested in Phase 2 (PHASE2.md), and IA64 is on hold (D2).
 
 ## Resume here
@@ -9,12 +10,14 @@ and tested in Phase 2 (PHASE2.md), and IA64 is on hold (D2).
 1. The kit: done. `tools/kit.sh x86` builds the clang variant and makes
    `out/kits/ISSINOHO-X86VMS-VMSSQLITE-V0354-1E1-1.PCSI` (D3, D11); `tools/installcheck.sh x86`
    (asks the user first: it installs system-wide) installs it, tests it and removes it.
-2. Next, each with the user's go-ahead (public): the GitHub release `v3.54.1-vms1` (the kit
-   and `SHA256SUMS`, notes from `overlay/vmsport/kit/news`); a banner for the README
-   (`docs/images/banner.svg`, like the family's) and its status line; the website card
-   (vms-grep `site/projects.json`, `tools/site-releases.sh`, the README table); the upstream
-   watch (vms-grep `tools/upstream-watch.json`, release-monitoring.org's SQLite project).
-3. The open points of PHASE3.md's hand-off still stand; none blocks the release.
+2. The release: done. `v3.54.1-vms1` (the kit and `SHA256SUMS`; notes made from
+   `overlay/vmsport/kit/news` and this file), the README's banner (`docs/images/banner.svg`) and
+   install section; in vms-grep the website card (`site/projects.json`, `site/releases.json`),
+   the README table and the upstream watch (release-monitoring.org project 4877). The user
+   pushes and creates releases (the harness refuses `git push` from here).
+3. Open: PHASE3.md's open points; IA64 (D2, on hold); a VSI C (ILP32) build in a later kit if
+   32-bit-pointer callers appear (D11). The next release follows SQLite's (D1): a new `vms<n>`,
+   new exports appended to `sqlite3_shr.symbols`.
 
 ## The kit (D11)
 
