@@ -243,10 +243,15 @@ $ @VMSLIGHTTPD$ROOT:[COM]VMSLIGHTTPD$CONTROL START
 - **Cleanup**, once you're satisfied: the scratch tree, and in MariaDB the board's database
   (keep `BOARD-MYSQL.SQL`).
 
-## Tested so far
+## Tested so far (x86-64, 2026-10-23)
 
 - `phpbb_mysql_to_sqlite.php` against vms-lighttpd's phpBB 3.3.19 test board on MariaDB, into a
   database made by phpBB's installer (vms-php's SQLite test board, D29): 69 tables, 3,575 rows,
-  the schemas identical, every count equal, `integrity_check` ok (2026-10-23).
-- Not yet run: that board served from the copied database (`test_phpbb.py`), and the steps
-  above end to end.
+  the schemas identical, every count equal, `integrity_check` ok.
+- That SQLite test board then served the copied database (its cache emptied first), with the
+  MySQL board's own accounts: `test_phpbb.py` **14 of 14** (log in, post a topic, an
+  attachment uploaded and downloaded back, search, the protected paths). New rows continued the
+  copied ids (topic 8, attachment 7), and `integrity_check` was ok afterwards.
+- Not run as written here: the scratch install with the board's extensions (step 2) and the
+  ownership commands (step 6). The test boards ran under one account, and the copied board
+  had only phpBB's built-in extension.
