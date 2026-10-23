@@ -53,4 +53,29 @@ step "shareable image options"
 
 printf 'VERSION=%s\nKIT_VERSION=%s-vms%s\n' "$UPSTREAM_VERSION" "$UPSTREAM_VERSION" \
     "$VMS_PATCH_LEVEL" > "$stage/vmsport/version.env"
+
+# --- PCSI kit inputs (vmsport/kit/MAKE_KIT.COM builds the kit on the node, D3) --
+step "PCSI kit inputs"
+kit=$stage/vmsport/kit
+# SQLite 3.54.1: 3 the major, 54 the minor, 1 the PCSI update; our patch level
+# is the ECO (as vms-zlib): 3.54.1-vms1 is V3.54-1E1.
+IFS=. read -r major minor update _ <<< "$UPSTREAM_VERSION"
+pcsiversion="V$major.$minor-${update:-0}E$VMS_PATCH_LEVEL"
+kitversion="$UPSTREAM_VERSION-vms$VMS_PATCH_LEVEL"
+subst() {
+    sed -e "s/@PRODUCER@/$KIT_PRODUCER/g" -e "s/@PRODUCT@/$KIT_PRODUCT/g" -e "s/@BASE@/$1/g" \
+        -e "s/@PCSIVERSION@/$pcsiversion/g" -e "s/@VERSION@/$UPSTREAM_VERSION/g" \
+        -e "s/@KITVERSION@/$kitversion/g"
+}
+# x86-64 only (D2: IA64 on hold)
+subst X86VMS < "$kit/vmssqlite.pcsi\$desc_template" > "$kit/PRODUCT-X86VMS.PCSI\$DESC"
+subst X86VMS < "$kit/vmssqlite.pcsi\$text_template" > "$kit/PRODUCT-X86VMS.PCSI\$TEXT"
+rm -f "$kit/vmssqlite.pcsi\$desc_template" "$kit/vmssqlite.pcsi\$text_template"
+subst "" < "$kit/readme.vms" > "$kit/README.VMS"; rm -f "$kit/readme.vms"
+mv "$kit/news" "$kit/NEWS."
+cp "$top/COPYING" "$kit/COPYING."
+groff -man -Tascii -P-cbou "$stage/sqlite3.1" > "$kit/SQLITE3.TXT" 2>/dev/null ||
+    die "groff could not format sqlite3.1"
+printf 'KIT_PRODUCER=%s\nKIT_PRODUCT=%s\nPCSI_VERSION=%s\nKIT_VERSION=%s\n' "$KIT_PRODUCER" \
+    "$KIT_PRODUCT" "$pcsiversion" "$kitversion" > "$kit/kit.env"
 step "staged $stage"

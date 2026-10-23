@@ -260,3 +260,29 @@ there, and everything be rebuilt and retested); give vms-php a second dependency
 for SQLite alone (a change to its build for one library). Linking `SQLITE3$SHR` instead of
 the object library would let SQLite be updated without relinking PHP, but needs the image
 installed or a logical name at run time, unlike the other dependencies.
+
+## D11. The first kit's contents: the clang build, the shell, both libraries, `SQLITE3$SHR` as a system logical
+
+**Status:** chosen by the user (2026-10-23): contents and compiler; the layout is from D3.
+
+`VMSSQLITE V3.54-1E1` for x86-64 (`ISSINOHO-X86VMS-VMSSQLITE-V0354-1E1-1`) installs
+`[VMSSQLITE]` (PCSI's destination, `SYS$COMMON:` by default) with `[BIN]SQLITE3.EXE` (the shell,
+linked with the object library), `[LIB]LIBSQLITE3.OLB` and `SQLITE3$SHR.EXE`,
+`[INCLUDE]SQLITE3.H` and `SQLITE3EXT.H`, `[COM]VMSSQLITE$SETUP.COM` (the `sqlite3` symbol),
+`[DOC]` (README.VMS, COPYING, NEWS, the shell's manual page as SQLITE3.TXT), and
+`SYS$STARTUP:VMSSQLITE$STARTUP.COM`, which defines the system logicals `VMSSQLITE$ROOT`
+(concealed) and `SQLITE3$SHR` (the image, for programs linked against it). PCSI runs it after
+the install, and with `REMOVE` at removal, as the family's kits do.
+- **Clang (LP64) only.** It is the build PHP links (D10) and the one tested most. VSI C
+  programs use it with `/POINTER_SIZE=64/NAMES=AS_IS`: the API has no `long` or `size_t`,
+  and every exported name fits in 31 characters (longest: `sqlite3_rtree_geometry_callback`),
+  so the names don't need shortening. The install check builds and runs a VSI C program so.
+  Alternative: ship the VSI C (ILP32) build as well, in a second tree. Two `SQLITE3$SHR`
+  images with one name would need different names or directories, and 32-bit-pointer
+  callers are not known to exist yet; it can come in a later kit.
+- **`SQLITE3$SHR` as a system logical name**, not `SYS$SHARE:SQLITE3$SHR.EXE` and not
+  `INSTALL`ed: the kit then writes nothing into the system's directories except its startup
+  procedure. The image needs no privileges, so no INSTALL. Executive mode, like
+  `VMSSQLITE$ROOT`, so privileged images could use it. Startup reports if it replaces another
+  translation (another SQLite kit's); `REMOVE` deassigns it only if it still points at ours.
+- No PCSI `software` dependencies: the images use only the C RTL and system services.

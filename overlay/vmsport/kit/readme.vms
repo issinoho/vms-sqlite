@@ -1,0 +1,102 @@
+SQLite for OpenVMS
+==================
+
+This is SQLite @VERSION@ built natively for OpenVMS x86-64 with VSI clang
+(64-bit pointers), from the unmodified SQLite release plus the patches and
+the OpenVMS file layer of the vms-sqlite project:
+
+    https://github.com/issinoho/vms-sqlite
+
+Kit version: @KITVERSION@.  SQLite and this port are in the public domain;
+see COPYING.  The shell is described in SQLITE3.TXT (its manual page), the
+API at https://sqlite.org/c3ref/intro.html and in SQLITE3.H.
+
+What is installed
+-----------------
+    VMSSQLITE$ROOT:[BIN]SQLITE3.EXE             the sqlite3 shell
+    VMSSQLITE$ROOT:[LIB]LIBSQLITE3.OLB          the library (object library)
+    VMSSQLITE$ROOT:[LIB]SQLITE3$SHR.EXE         the library (shareable image)
+    VMSSQLITE$ROOT:[INCLUDE]SQLITE3.H, SQLITE3EXT.H
+    VMSSQLITE$ROOT:[COM]VMSSQLITE$SETUP.COM     the DCL symbol sqlite3
+    SYS$STARTUP:VMSSQLITE$STARTUP.COM           the logical names
+
+Setting up
+----------
+The kit installs VMSSQLITE$STARTUP.COM into SYS$STARTUP and runs it once:
+it defines the system logical names VMSSQLITE$ROOT and SQLITE3$SHR (the
+shareable image).  To define them at every boot, the system manager adds
+this line to SYS$MANAGER:SYSTARTUP_VMS.COM:
+
+    $ @SYS$STARTUP:VMSSQLITE$STARTUP.COM
+
+Users get the sqlite3 symbol from LOGIN.COM (or SYLOGIN.COM):
+
+    $ @VMSSQLITE$ROOT:[COM]VMSSQLITE$SETUP
+
+The shell
+---------
+    $ sqlite3 test.db
+    $ sqlite3 "-header" "-csv" test.db "select * from t;"
+
+DCL upper-cases arguments that are not quoted: quote the shell's options
+and any SQL.  File names may be OpenVMS specifications (DISK:[DIR]TEST.DB)
+or Unix-style names (dir/test.db), as from PHP.
+
+Building a program against SQLite
+---------------------------------
+The library is built with clang, 64-bit pointers.  With clang:
+
+    $ clang -I/vmssqlite$root/include -c myprog.c
+    $ LINK myprog, VMSSQLITE$ROOT:[LIB]LIBSQLITE3.OLB/LIBRARY
+
+With VSI C, compile with 64-bit pointers and case-sensitive names:
+
+    $ CC /POINTER_SIZE=64 /NAMES=AS_IS /INCLUDE=VMSSQLITE$ROOT:[INCLUDE] myprog.c
+
+and link either statically, as above, or against the shareable image, so
+that a later kit updates SQLite without relinking:
+
+    $ LINK myprog, SYS$INPUT/OPTIONS
+    SQLITE3$SHR/SHAREABLE
+
+A program linked so finds the image through the logical name SQLITE3$SHR at
+run time.  The image's symbol vector only grows (GSMATCH LEQUAL 3,54): a
+program linked against this kit runs with any later kit of SQLite 3.
+
+SQLite on OpenVMS: what differs
+-------------------------------
+- The file layer.  The C RTL's file I/O is not coherent between processes,
+  so this SQLite does its I/O with $QIO, keeps the end of file in the file
+  header, and takes its locks on a companion file.  Several processes and
+  accounts can share a database; transactions are atomic across a process
+  stopped at any moment (STOP/ID).
+- The lock file.  Each database has a <database>-lock beside it (TEST.DB
+  has TEST.DB-LOCK), which SQLite never deletes.  To delete or rename a
+  database, do the same to its lock file (and to any -JOURNAL), with no
+  process using it.
+- Access.  Every account that writes a database needs write access to the
+  database, its lock file and its directory (the journal is created
+  there).  Use UIC protection or ACLs on all three.  The first process to
+  open a database creates its lock file, with that process's default
+  protection.
+- Rollback journals only.  WAL needs memory shared between processes,
+  which the C RTL maps per UIC group: PRAGMA journal_mode=WAL leaves the
+  journal mode as it was.  Memory-mapped I/O (mmap_size) is off.
+- No loadable extensions (load_extension, .load); FTS5, R*Tree, JSON and
+  the math functions are built in.
+- Temporary files go to SYS$SCRATCH.
+- Each transaction costs more than on Unix (locks, $QIO and file header
+  calls; about 1.3 ms for an autocommit SELECT on the test system): put
+  many statements in one transaction.
+
+Diagnostics
+-----------
+    $ DEFINE VMSSQLITE_ERRORS DISK$X:[DIR]
+
+makes each process write the file layer's errors, with their VMS status,
+to VMSSQLITE_ERR_<pid>.LOG in that directory (made at the first error).
+
+    $ DEFINE VMSSQLITE_TRACE DISK$X:[DIR]
+
+makes each process log every lock, sync, open and I/O count to
+VMSSQLITE_<pid>.LOG there; it slows the process down.

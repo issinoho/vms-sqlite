@@ -1,0 +1,37 @@
+--
+-- PCSI product description for SQLite for OpenVMS (vms-sqlite, D3, D11).
+-- Product name VMSSQLITE: VSI ships no SQLite.  The clang (LP64) build only.
+-- Template: tools/prepare.sh substitutes @PRODUCER@, @BASE@, @PRODUCT@ and @PCSIVERSION@.
+--
+product @PRODUCER@ @BASE@ @PRODUCT@ @PCSIVERSION@ full ;
+
+    information RELEASE_NOTES phase after ;
+
+    directory [VMSSQLITE] ;
+    directory [VMSSQLITE.BIN] ;
+    directory [VMSSQLITE.COM] ;
+    directory [VMSSQLITE.DOC] ;
+    directory [VMSSQLITE.INCLUDE] ;
+    directory [VMSSQLITE.LIB] ;
+
+    file [VMSSQLITE.BIN]SQLITE3.EXE ;
+    file [VMSSQLITE.LIB]SQLITE3$SHR.EXE ;
+    file [VMSSQLITE.LIB]LIBSQLITE3.OLB ;
+    file [VMSSQLITE.INCLUDE]SQLITE3.H ;
+    file [VMSSQLITE.INCLUDE]SQLITE3EXT.H ;
+    file [VMSSQLITE.COM]VMSSQLITE$SETUP.COM ;
+    file [VMSSQLITE.DOC]README.VMS ;
+    file [VMSSQLITE.DOC]COPYING. ;
+    file [VMSSQLITE.DOC]NEWS. ;
+    file [VMSSQLITE.DOC]SQLITE3.TXT ;
+    file [SYS$STARTUP]VMSSQLITE$STARTUP.COM ;
+
+    -- Define VMSSQLITE$ROOT and SQLITE3$SHR now and print the post-installation
+    -- tasks (PCSI shows only the title of an information message unless /HELP is given).
+    execute postinstall "@PCSI$DESTINATION:[SYS$STARTUP]VMSSQLITE$STARTUP.COM INSTALL" interactive ;
+    -- On removal, deassign them.
+    execute install "CONTINUE" remove "@PCSI$DESTINATION:[SYS$STARTUP]VMSSQLITE$STARTUP.COM REMOVE" ;
+
+    information POST_INSTALL phase after ;
+
+end product ;

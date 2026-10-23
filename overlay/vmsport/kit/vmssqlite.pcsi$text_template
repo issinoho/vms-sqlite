@@ -1,0 +1,21 @@
+=product @PRODUCER@ @BASE@ @PRODUCT@ @PCSIVERSION@ full
+1 'PRODUCER
+=prompt @PRODUCER@
+1 'PRODUCT
+=prompt SQLite @VERSION@ for OpenVMS (vms-sqlite)
+1 'NOTICE
+=prompt SQLite and this port are in the public domain.
+1 RELEASE_NOTES
+=prompt Documentation is in [VMSSQLITE.DOC]README.VMS under the installation directory.
+1 POST_INSTALL
+=prompt Post-installation tasks for SQLite for OpenVMS (vms-sqlite)
+    VMSSQLITE$ROOT and SQLITE3$SHR are defined now (system logical names).
+    At boot, add to SYS$MANAGER:SYSTARTUP_VMS.COM:
+    $ @SYS$STARTUP:VMSSQLITE$STARTUP.COM
+    The DCL symbol sqlite3, from LOGIN.COM or SYLOGIN.COM:
+    $ @VMSSQLITE$ROOT:[COM]VMSSQLITE$SETUP
+    Building against SQLite: compile with /INCLUDE=VMSSQLITE$ROOT:[INCLUDE]
+    and link with VMSSQLITE$ROOT:[LIB]LIBSQLITE3.OLB/LIBRARY, or with
+    SQLITE3$SHR/SHAREABLE in an options file (README.VMS).
+
+PRODUCT REMOVE VMSSQLITE deassigns VMSSQLITE$ROOT and SQLITE3$SHR.

@@ -1,0 +1,16 @@
+SQLite for OpenVMS (vms-sqlite) - news
+======================================
+
+3.54.1-vms1 (2026-10)
+
+  First kit. SQLite 3.54.1 for OpenVMS x86-64, built with VSI clang (LP64):
+  - the sqlite3 shell, the object library LIBSQLITE3.OLB, the shareable
+    image SQLITE3$SHR.EXE and the headers;
+  - an OpenVMS file layer (VFS) of its own: $QIO block I/O and locks on a
+    <database>-lock file, so that several processes, and accounts in
+    different UIC groups, can share one database safely;
+  - rollback journals only (no WAL), no loadable extensions; FTS5, R*Tree,
+    JSON and the math functions built in.
+  Tested with SQLite's mptest, a writer stopped at random moments, several
+  writer processes, a cross-group test, a SQL corpus compared with SQLite
+  on Linux, and PHP for OpenVMS (8.5.12-vms2) running a phpBB board.
