@@ -5,8 +5,8 @@ wrapped by the same tooling as `~/projects/vms-php`, `vms-zlib`, `vms-pcre2` and
 sibling ports. Read vms-grep's `CLAUDE.md` for the ground rules and the VMS/ssh pitfalls, and
 vms-mariadb's and vms-php's `CLAUDE.md` for the clang and C RTL ones; they all apply. Read
 the plan (`docs/SQLITE_OPENVMS_PLAN.md`), `docs/DECISIONS.md` and the latest `docs/PHASE<n>.md`
-(its "Resume here" section) before starting work. Work
-phase by phase; stop and ask at each phase exit.
+(its "Resume here" section: now `docs/PHASE3.md`) before starting work. Work phase by phase;
+stop and ask at each phase exit.
 
 **Acceptance:** `sqlite3` and the libraries on x86-64 (clang and VSI C), several processes
 safely sharing one database, and PHP for OpenVMS's `sqlite3`/`pdo_sqlite` running a phpBB
@@ -56,19 +56,28 @@ tools/build.sh x86 ALL CLANG|CC                  # push + BUILD.COM (library, sh
 tools/corpus.sh x86 CLANG|CC                     # SQL corpus on host and VMS, compared -> out/corpus/
 tools/vms.sh x86 dcl '@[.SQLITE-3_54_1.VMSPORT.TEST]<proc> CLANG|CC ...'
     # SMOKE, VFS_TEST, CONCURRENT [n|MIXED], MPTEST [scripts], KILLTEST [n] [FULL|NORMAL], CORPUS
-tools/vms.sh x86 dcl '@[.probe]vms_probe CLANG FEATURES [probes]'   # Phase 0 probes
+tools/vms.sh x86 dcl '@[.probe]vms_probe CLANG FEATURES [probes]'   # probes (p_cost, p_getlk, ...)
+tools/suite.sh x86 CLANG|CC [quick]              # the whole regression run of a build (~1 h) -> out/suite-*.log
+tools/procs.sh x86                               # our processes on the node: after any timeout or stopped job
+tools/deploy.sh x86                              # copy the clang install tree to the shared deps dir (vms-php, D10)
+tools/vms.sh x86 dcl '@[.SQLITE-3_54_1.VMSPORT.TEST]SPEEDTEST CLANG|CC'     # speedtest1 --size 25
+tools/vms.sh x86 dcl '@[.SQLITE-3_54_1.VMSPORT.TEST]CROSSGROUP SETUP <account>'  # D5 test: two accounts, see the .COM
 ```
 
 Diagnostics: `define vmssqlite_trace DISK$...:[...TRACE]` before a run: every process writes
-its lock calls, syncs and I/O counts to `VMSSQLITE_<pid>.LOG` there.
+its lock calls, syncs, opens, end-of-file decisions and I/O counts to `VMSSQLITE_<pid>.LOG`
+there; merge the files by time to see what several processes did (PORTING_LOG #25 was found
+so). The trace slows processes enough to hide races: `define vmssqlite_errors <dir>` logs
+only VFS errors (with the VMS status) to `VMSSQLITE_ERR_<pid>.LOG`, made at the first error,
+and leaves the timing alone (#26).
 
 ## Pitfalls met in this repository (see docs/PORTING_LOG.md)
 
 - **The test programs link the library statically**: BUILD.COM relinks them (PROGS.COM);
   a test of a VFS change against old images proves nothing (#15).
-- **`vms.sh`'s timeout does not stop the remote session.** After any timeout, list
-  `show system` for `FTA*_<user>` processes of ours and stop them: a runaway loop ran an hour
-  on the board's node (#17).
+- **`vms.sh`'s timeout does not stop the remote session**, nor does stopping the local job.
+  After either, run `tools/procs.sh` and stop our leftover processes: a runaway loop ran an
+  hour on the board's node (#17), a timed-out threadtest4 11 minutes (#23).
 - **DCL `f$search` in loops**: give each search its own stream number, and don't use an
   `f$search` check before a delete inside a loop (#17).
 - **A spawned subprocess dies with the ssh session**: the foreground side must wait for it
@@ -77,6 +86,19 @@ its lock calls, syncs and I/O counts to `VMSSQLITE_<pid>.LOG` there.
   two node jobs at once when one measures timing (mptest's 10 s busy limit).
 - Don't `rm` with globs after `cd` in host commands (blocked by the harness): use fresh
   `mktemp -d` directories instead.
+- **Rare failures need many runs:** mptest config02 corrupted ~1 run in 6-13 before #25's fix,
+  CONCURRENT lost a worker ~1 in 20 (#26), and Phase 2 had recorded both as passing on luck.
+  Repeat a test ~15-40 times before calling a fix good; one pass proves little.
+- **DCL:** an `OPEN` that fails under `SET NOON` makes `READ/END` loop for ever, burning CPU:
+  use `OPEN/ERROR=`. A relative directory (`[---]`, `[.X]`) in `F$PARSE` resolves against the
+  process default, not the default-spec argument; `dev:[a][.b]` is not a valid spec (strip the
+  `]` and append `.b]`). A batch job's relative `/LOG_FILE` goes to SYS$LOGIN.
+- **Before anything public:** check for node details and push in separate steps (scan
+  `git log -p` of what will be pushed, then push). The repositories are public (vms-sqlite since
+  2026-10-23; its history was scrubbed once of an account name and UIC groups). Use
+  `<x86-host>`, `<test-account>`, `<group-a>` style placeholders.
+- **The node is shared:** the account is also the user's (interactive sessions, scheduled jobs
+  such as `sshlogs`, other projects' builds): stop only what is provably ours (`tools/procs.sh`).
 
 ## Commits
 
