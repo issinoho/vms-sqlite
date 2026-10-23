@@ -1,6 +1,10 @@
 # Phase 3: PHP (vms-php 8.5.12-vms2)
 
-**Status:** the acceptance test passed (2026-10-23); vms-php's kit and documents are next, with the user. The work is in `~/projects/vms-php` (its rules and records
+**Status:** done (2026-10-23): the acceptance test passed, and vms-php 8.5.12-vms2 (with this
+library) is installed on the live board and released
+(https://github.com/issinoho/vms-php/releases/tag/v8.5.12-vms2). This repository is public
+since the same day (https://github.com/issinoho/vms-sqlite), its history scrubbed of node
+details first (an account name and UIC group numbers in D5/PHASE2, replaced by placeholders). The work is in `~/projects/vms-php` (its rules and records
 apply there: its D28 for the extensions, its PORTING_LOG); this file keeps the SQLite side.
 
 ## Plan (from SQLITE_OPENVMS_PLAN.md, the user's choices of 2026-10-22)
@@ -29,5 +33,5 @@ the corpus, mptest and the durability test (Phase 2), several processes sharing 
 database safely, and PHP's `sqlite3`/`pdo_sqlite` passing their tests and running a phpBB
 board on SQLite under load with no crash.
 
-Still to do (plan Phases 4-5): vms-php's vms2 kit and documents (with the user); this
-project's own kit (PCSI VMSSQLITE, D3) and release; IA64 (D2, on hold).
+Still to do (plan Phases 4-5): this project's own kit (PCSI VMSSQLITE, D3) and release; IA64
+(D2, on hold).
